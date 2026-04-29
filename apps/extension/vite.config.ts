@@ -5,13 +5,20 @@ import manifest from "./manifest.json" with { type: "json" };
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
+  const WEB_BASE_DEFAULT =
+    "https://oneclickcast.info-codeandpromote.workers.dev";
+  const SIGNALING_DEFAULT =
+    "wss://oneclickcast-signaling.info-codeandpromote.workers.dev";
   return {
     define: {
+      "import.meta.env.VITE_WEB_BASE_URL": JSON.stringify(
+        env.VITE_WEB_BASE_URL ?? WEB_BASE_DEFAULT,
+      ),
       "import.meta.env.VITE_VIEWER_BASE_URL": JSON.stringify(
-        env.VITE_VIEWER_BASE_URL ?? "https://oneclickcast.pages.dev/room",
+        env.VITE_VIEWER_BASE_URL ?? `${WEB_BASE_DEFAULT}/room`,
       ),
       "import.meta.env.VITE_SIGNALING_URL": JSON.stringify(
-        env.VITE_SIGNALING_URL ?? "wss://oneclickcast-signaling.workers.dev",
+        env.VITE_SIGNALING_URL ?? SIGNALING_DEFAULT,
       ),
     },
     plugins: [react(), crx({ manifest })],
