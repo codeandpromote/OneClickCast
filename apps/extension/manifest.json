@@ -36,16 +36,19 @@
     "debugger"
   ],
   "host_permissions": [
+    "https://oneclickcast.pages.dev/*",
     "https://*.oneclickcast.pages.dev/*",
-    "https://*.oneclickcast-signaling.workers.dev/*",
-    "wss://*.oneclickcast-signaling.workers.dev/*"
+    "https://oneclickcast-signaling.workers.dev/*",
+    "wss://oneclickcast-signaling.workers.dev/*",
+    "http://localhost/*",
+    "ws://localhost/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' wss://oneclickcast-signaling.workers.dev ws://localhost:* https://oneclickcast.pages.dev http://localhost:*"
   },
   "web_accessible_resources": [
     {
-      "resources": ["src/assets/*"],
+      "resources": ["src/assets/*", "src/offscreen/offscreen.html"],
       "matches": ["<all_urls>"]
     }
   ]

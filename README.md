@@ -63,12 +63,39 @@ pnpm --filter @oneclickcast/signaling dev
 3. Enable "Developer mode"
 4. Click "Load unpacked" → select `apps/extension/dist`
 
+### End-to-end local test (Phase 1)
+
+Run all three apps in three terminals:
+
+```bash
+# Terminal 1: signaling (Cloudflare Worker via wrangler dev → ws://localhost:8787)
+pnpm --filter @oneclickcast/signaling dev
+
+# Terminal 2: viewer page (Next.js → http://localhost:3000)
+pnpm --filter @oneclickcast/web dev
+
+# Terminal 3: build extension with localhost URLs
+cd apps/extension
+VITE_VIEWER_BASE_URL=http://localhost:3000/room \
+VITE_SIGNALING_URL=ws://localhost:8787 \
+  pnpm build
+```
+
+Then:
+
+1. Reload the extension in `chrome://extensions`
+2. Click the OneClickCast toolbar icon → **Start Sharing** → pick a tab/window/screen
+3. Copy the share link (looks like `http://localhost:3000/room/abc123`)
+4. Open it in another browser, incognito window, or your phone (same Wi-Fi)
+5. You should see your screen on the viewer page within ~2 seconds
+
 ### Deploying the signaling worker
 
 ```bash
 cd apps/signaling
 npx wrangler login
 pnpm deploy
+# → wss://oneclickcast-signaling.workers.dev
 ```
 
 ### Deploying the web app
@@ -91,7 +118,7 @@ pnpm build
 ## Roadmap
 
 - [x] Phase 0: Monorepo scaffold
-- [ ] Phase 1: WebRTC screen-share MVP
+- [x] Phase 1: WebRTC screen-share MVP (presenter offscreen doc, multi-viewer)
 - [ ] Phase 2: TURN + reliability
 - [ ] Phase 3: Engagement tracking + audio
 - [ ] Phase 4: Tab remote control
