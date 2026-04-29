@@ -1,0 +1,23 @@
+/**
+ * Cloudflare Workers config for the OneClickCast web app, built via
+ * @opennextjs/cloudflare. Run `pnpm --filter @oneclickcast/web build:cf` to
+ * produce the .open-next bundle, then `deploy:cf` to ship it.
+ *
+ * Env vars (NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY) are set
+ * in the Cloudflare dashboard under Settings → Variables and secrets, NOT
+ * here, so the keys never land in git.
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "oneclickcast",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-03-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

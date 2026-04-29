@@ -9,6 +9,8 @@ out/
 .next/
 .turbo/
 .wrangler/
+.open-next/
+.vercel/
 
 # Environment
 .env
