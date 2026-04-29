@@ -154,8 +154,28 @@ export function Popup() {
     setStatus("starting");
     setError(null);
     try {
+      // Show the desktopCapture picker from the popup context. Calling this
+      // from the service worker in MV3 is unreliable because Chrome
+      // doesn't treat SW-handled messages as carrying a user gesture.
+      const streamId = await new Promise<string>((resolve, reject) => {
+        chrome.desktopCapture.chooseDesktopMedia(
+          ["screen", "window", "tab", "audio"],
+          (id) => {
+            const lastErr = chrome.runtime.lastError;
+            if (lastErr) {
+              reject(new Error(lastErr.message));
+            } else if (!id) {
+              reject(new Error("Capture cancelled"));
+            } else {
+              resolve(id);
+            }
+          },
+        );
+      });
+
       const res = (await chrome.runtime.sendMessage({
         type: "START_SHARE",
+        streamId,
       })) as { shareLink?: string; error?: string };
       if (res?.error) throw new Error(res.error);
       if (res?.shareLink) {

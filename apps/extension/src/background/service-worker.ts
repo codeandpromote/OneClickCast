@@ -146,7 +146,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "START_SHARE": {
         try {
-          const result = await startShare();
+          const result = await startShare(msg.streamId as string | undefined);
           sendResponse(result);
         } catch (e) {
           sendResponse({
@@ -347,11 +347,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
-async function startShare(): Promise<
-  { shareLink: string; roomId: string } | { error: string }
-> {
-  const streamId = await chooseDesktopMedia();
-  if (!streamId) return { error: "Capture cancelled" };
+async function startShare(
+  streamId?: string,
+): Promise<{ shareLink: string; roomId: string } | { error: string }> {
+  if (!streamId) return { error: "No stream id provided" };
 
   const roomId = generateRoomId();
   const shareLink = `${VIEWER_BASE_URL}/${roomId}`;
@@ -611,21 +610,6 @@ async function fireInattentionNotification(viewerId: string) {
   } catch (err) {
     console.warn("[OneClickCast] notification failed", err);
   }
-}
-
-function chooseDesktopMedia(): Promise<string | null> {
-  return new Promise((resolve) => {
-    chrome.desktopCapture.chooseDesktopMedia(
-      ["screen", "window", "tab", "audio"],
-      (streamId) => {
-        if (chrome.runtime.lastError || !streamId) {
-          resolve(null);
-        } else {
-          resolve(streamId);
-        }
-      },
-    );
-  });
 }
 
 async function ensureOffscreen() {
