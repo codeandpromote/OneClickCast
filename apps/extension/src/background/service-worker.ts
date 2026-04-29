@@ -12,7 +12,7 @@ const VIEWER_BASE_URL =
   import.meta.env.VITE_VIEWER_BASE_URL ?? `${WEB_BASE_URL}/room`;
 const SIGNALING_URL =
   import.meta.env.VITE_SIGNALING_URL ??
-  "wss://oneclickcast-signaling.workers.dev";
+  "wss://oneclickcast-signaling.info-codeandpromote.workers.dev";
 
 const OFFSCREEN_PATH = "src/offscreen/offscreen.html";
 const DEBUGGER_PROTOCOL_VERSION = "1.3";

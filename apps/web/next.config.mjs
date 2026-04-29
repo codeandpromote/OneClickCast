@@ -7,7 +7,8 @@
 const SUPABASE_URL_DEFAULT = "https://wajtoatkvmqabjykurcw.supabase.co";
 const SUPABASE_ANON_KEY_DEFAULT =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndhanRvYXRrdm1xYWJqeWt1cmN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0ODc1NjYsImV4cCI6MjA5MzA2MzU2Nn0.WeE4xAw0Kjo9q3FCEQ24JfzdZw3qpJkiaDuZa5a3xiQ";
-const SIGNALING_URL_DEFAULT = "wss://oneclickcast-signaling.workers.dev";
+const SIGNALING_URL_DEFAULT =
+  "wss://oneclickcast-signaling.info-codeandpromote.workers.dev";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

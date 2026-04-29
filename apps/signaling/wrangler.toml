@@ -9,7 +9,10 @@ class_name = "Room"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["Room"]
+# new_sqlite_classes is required for Durable Objects on the free plan.
+# (Cloudflare made SQLite-backed storage the default in 2025; the legacy
+# new_classes migration only works on the paid Workers plan.)
+new_sqlite_classes = ["Room"]
 
 [observability]
 enabled = true
