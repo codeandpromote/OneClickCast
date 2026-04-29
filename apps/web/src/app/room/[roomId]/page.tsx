@@ -1,7 +1,11 @@
 "use client";
 
-import { use, useEffect, useRef, useState } from "react";
-import { DEFAULT_ROOM_CONFIG, type IceServer } from "@oneclickcast/shared";
+import { use, useCallback, useEffect, useRef, useState } from "react";
+import {
+  DEFAULT_ROOM_CONFIG,
+  type ControlEvent,
+  type IceServer,
+} from "@oneclickcast/shared";
 
 const SIGNALING_URL =
   process.env.NEXT_PUBLIC_SIGNALING_URL ??
@@ -10,6 +14,7 @@ const SIGNALING_URL =
 const RECONNECT_INITIAL_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 const VIEWER_PING_INTERVAL_MS = 25_000;
+const MOUSE_MOVE_THROTTLE_MS = 40;
 
 type ConnState = "connecting" | "waiting" | "live" | "ended" | "error";
 
@@ -29,6 +34,19 @@ export default function ViewerRoom({
   const cancelledRef = useRef(false);
   const [state, setState] = useState<ConnState>("connecting");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [controlActive, setControlActive] = useState(false);
+  const controlActiveRef = useRef(false);
+
+  const sendControl = useCallback((event: ControlEvent) => {
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "control", event }));
+    }
+  }, []);
+
+  useEffect(() => {
+    controlActiveRef.current = controlActive;
+  }, [controlActive]);
 
   useEffect(() => {
     cancelledRef.current = false;
@@ -150,7 +168,6 @@ export default function ViewerRoom({
         RECONNECT_MAX_DELAY_MS,
       );
       reconnectAttemptsRef.current = attempt + 1;
-      console.log(`[viewer] Reconnecting in ${delay}ms`);
       reconnectTimerRef.current = setTimeout(() => {
         reconnectTimerRef.current = null;
         connect();
@@ -194,6 +211,34 @@ export default function ViewerRoom({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
+  // Keyboard capture while control is active
+  useEffect(() => {
+    if (!controlActive) return;
+
+    const onKey = (e: KeyboardEvent) => {
+      if (!controlActiveRef.current) return;
+      e.preventDefault();
+      const modifiers = computeModifiers(e);
+      const action = e.type === "keydown" ? "down" : "up";
+      const isPrintable = e.key.length === 1 && !e.ctrlKey && !e.metaKey;
+      sendControl({
+        kind: "key",
+        key: e.key,
+        code: e.code,
+        action,
+        modifiers,
+        text: isPrintable && action === "down" ? e.key : undefined,
+      });
+    };
+
+    window.addEventListener("keydown", onKey, { capture: true });
+    window.addEventListener("keyup", onKey, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", onKey, { capture: true });
+      window.removeEventListener("keyup", onKey, { capture: true });
+    };
+  }, [controlActive, sendControl]);
+
   return (
     <div className="min-h-screen bg-surface-dark text-white flex flex-col">
       <header className="px-4 py-3 flex items-center justify-between border-b border-white/10">
@@ -205,18 +250,40 @@ export default function ViewerRoom({
           </div>
           <span className="font-semibold">OneClickCast</span>
         </div>
-        <StatusBadge state={state} />
+        <div className="flex items-center gap-3">
+          {state === "live" && (
+            <button
+              onClick={() => setControlActive((v) => !v)}
+              className={`text-xs font-medium px-3 py-1 rounded-md transition ${
+                controlActive
+                  ? "bg-amber-500 hover:bg-amber-600 text-white"
+                  : "bg-white/10 hover:bg-white/20 text-white"
+              }`}
+            >
+              {controlActive ? "Release control" : "Take control"}
+            </button>
+          )}
+          <StatusBadge state={state} />
+        </div>
       </header>
 
-      <main className="flex-1 flex items-center justify-center p-4">
+      <main className="flex-1 flex items-center justify-center p-4 relative">
         {state === "live" ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            controls={false}
-            className="max-w-full max-h-full rounded-lg shadow-2xl bg-black"
-          />
+          <div className="relative max-w-full max-h-full">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              controls={false}
+              className="max-w-full max-h-full rounded-lg shadow-2xl bg-black block"
+            />
+            {controlActive && (
+              <ControlOverlay
+                videoRef={videoRef}
+                sendControl={sendControl}
+              />
+            )}
+          </div>
         ) : (
           <div className="text-center">
             {state === "connecting" && <p>Connecting…</p>}
@@ -242,8 +309,125 @@ export default function ViewerRoom({
           </div>
         )}
       </main>
+
+      {controlActive && (
+        <div className="px-4 py-2 bg-amber-500/10 border-t border-amber-500/30 text-amber-200 text-xs text-center">
+          Remote control active — your clicks and keys go into the presenter's tab.
+          Only works if the presenter has enabled control.
+        </div>
+      )}
     </div>
   );
+}
+
+function ControlOverlay({
+  videoRef,
+  sendControl,
+}: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  sendControl: (event: ControlEvent) => void;
+}) {
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const lastMoveRef = useRef(0);
+
+  const toVideoCoords = (
+    clientX: number,
+    clientY: number,
+  ): { x: number; y: number } | null => {
+    const video = videoRef.current;
+    const overlay = overlayRef.current;
+    if (!video || !overlay || !video.videoWidth) return null;
+    const rect = overlay.getBoundingClientRect();
+    const localX = clientX - rect.left;
+    const localY = clientY - rect.top;
+    const scaleX = video.videoWidth / rect.width;
+    const scaleY = video.videoHeight / rect.height;
+    return {
+      x: Math.round(localX * scaleX),
+      y: Math.round(localY * scaleY),
+    };
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    const c = toVideoCoords(e.clientX, e.clientY);
+    if (!c) return;
+    sendControl({
+      kind: "mouse",
+      x: c.x,
+      y: c.y,
+      button: mapButton(e.button),
+      action: "down",
+      clickCount: e.detail || 1,
+    });
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    const c = toVideoCoords(e.clientX, e.clientY);
+    if (!c) return;
+    sendControl({
+      kind: "mouse",
+      x: c.x,
+      y: c.y,
+      button: mapButton(e.button),
+      action: "up",
+      clickCount: e.detail || 1,
+    });
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    const now = performance.now();
+    if (now - lastMoveRef.current < MOUSE_MOVE_THROTTLE_MS) return;
+    lastMoveRef.current = now;
+    const c = toVideoCoords(e.clientX, e.clientY);
+    if (!c) return;
+    sendControl({ kind: "mouse", x: c.x, y: c.y, action: "move" });
+  };
+
+  const onWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const c = toVideoCoords(e.clientX, e.clientY);
+    if (!c) return;
+    sendControl({
+      kind: "scroll",
+      x: c.x,
+      y: c.y,
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+    });
+  };
+
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+  };
+
+  return (
+    <div
+      ref={overlayRef}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerMove={onPointerMove}
+      onWheel={onWheel}
+      onContextMenu={onContextMenu}
+      className="absolute inset-0 cursor-crosshair ring-2 ring-amber-400/70 rounded-lg"
+      style={{ touchAction: "none" }}
+      tabIndex={0}
+    />
+  );
+}
+
+function mapButton(button: number): "left" | "middle" | "right" {
+  if (button === 1) return "middle";
+  if (button === 2) return "right";
+  return "left";
+}
+
+function computeModifiers(e: KeyboardEvent): number {
+  let m = 0;
+  if (e.altKey) m |= 1;
+  if (e.ctrlKey) m |= 2;
+  if (e.metaKey) m |= 4;
+  if (e.shiftKey) m |= 8;
+  return m;
 }
 
 async function fetchIceServers(): Promise<IceServer[]> {

@@ -48,12 +48,34 @@ export interface ViewerEngagement {
   changedAt: number;
 }
 
+export type ControlEvent =
+  | {
+      kind: "mouse";
+      x: number;
+      y: number;
+      button?: "left" | "middle" | "right";
+      action: "move" | "down" | "up" | "click" | "doubleclick";
+      clickCount?: number;
+    }
+  | {
+      kind: "key";
+      key: string;
+      code?: string;
+      action: "down" | "up" | "char";
+      modifiers?: number;
+      text?: string;
+    }
+  | {
+      kind: "scroll";
+      x: number;
+      y: number;
+      deltaX: number;
+      deltaY: number;
+    };
+
 export interface ControlMessage {
   type: "control";
-  event:
-    | { kind: "mouse"; x: number; y: number; button?: number; action: "move" | "down" | "up" | "click" }
-    | { kind: "key"; code: string; action: "down" | "up" }
-    | { kind: "scroll"; deltaX: number; deltaY: number };
+  event: ControlEvent;
   fromId?: string;
 }
 

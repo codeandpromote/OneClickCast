@@ -5,11 +5,15 @@ type Status = "idle" | "starting" | "active" | "error";
 
 interface SessionInfo {
   active: boolean;
+  mode?: "any" | "tab";
   shareLink?: string;
   viewerCount: number;
   viewerStats: ViewerStats[];
   engagement: ViewerEngagement[];
   micEnabled: boolean;
+  controlSupported: boolean;
+  controlEnabled: boolean;
+  sharedTabTitle?: string;
 }
 
 const STATS_POLL_MS = 1000;
@@ -23,6 +27,10 @@ export function Popup() {
   const [engagement, setEngagement] = useState<ViewerEngagement[]>([]);
   const [micEnabled, setMicEnabled] = useState(false);
   const [micPending, setMicPending] = useState(false);
+  const [controlSupported, setControlSupported] = useState(false);
+  const [controlEnabled, setControlEnabled] = useState(false);
+  const [controlPending, setControlPending] = useState(false);
+  const [tabTitle, setTabTitle] = useState<string | undefined>();
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -40,6 +48,9 @@ export function Popup() {
         setViewerStats(res.viewerStats ?? []);
         setEngagement(res.engagement ?? []);
         setMicEnabled(res.micEnabled === true);
+        setControlSupported(res.controlSupported === true);
+        setControlEnabled(res.controlEnabled === true);
+        setTabTitle(res.sharedTabTitle);
       } else {
         setStatus((s) => (s === "starting" ? s : "idle"));
         setShareLink(null);
@@ -47,6 +58,9 @@ export function Popup() {
         setViewerStats([]);
         setEngagement([]);
         setMicEnabled(false);
+        setControlSupported(false);
+        setControlEnabled(false);
+        setTabTitle(undefined);
       }
     };
 
@@ -78,6 +92,51 @@ export function Popup() {
     }
   };
 
+  const startTabSharing = async () => {
+    setStatus("starting");
+    setError(null);
+    try {
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      if (!tab?.id) throw new Error("Could not find an active tab");
+      if (tab.url?.startsWith("chrome://") || tab.url?.startsWith("chrome-extension://")) {
+        throw new Error("Cannot share Chrome system tabs");
+      }
+
+      const streamId = await new Promise<string>((resolve, reject) => {
+        chrome.tabCapture.getMediaStreamId(
+          { targetTabId: tab.id! },
+          (streamId) => {
+            const err = chrome.runtime.lastError;
+            if (err || !streamId)
+              reject(new Error(err?.message ?? "No stream id"));
+            else resolve(streamId);
+          },
+        );
+      });
+
+      const res = (await chrome.runtime.sendMessage({
+        type: "START_TAB_SHARE",
+        streamId,
+        tabId: tab.id,
+        tabTitle: tab.title,
+      })) as { shareLink?: string; error?: string };
+
+      if (res?.error) throw new Error(res.error);
+      if (res?.shareLink) {
+        setShareLink(res.shareLink);
+        setStatus("active");
+      } else {
+        setStatus("idle");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start tab share");
+      setStatus("error");
+    }
+  };
+
   const stopSharing = async () => {
     await chrome.runtime.sendMessage({ type: "STOP_SHARE" });
     setStatus("idle");
@@ -86,6 +145,9 @@ export function Popup() {
     setViewerStats([]);
     setEngagement([]);
     setMicEnabled(false);
+    setControlEnabled(false);
+    setControlSupported(false);
+    setTabTitle(undefined);
   };
 
   const copyLink = async () => {
@@ -102,13 +164,24 @@ export function Popup() {
       const res = (await chrome.runtime.sendMessage({
         type: "TOGGLE_MIC",
       })) as { ok: boolean; micEnabled?: boolean; error?: string };
-      if (res?.ok) {
-        setMicEnabled(res.micEnabled === true);
-      } else if (res?.error) {
-        setError(res.error);
-      }
+      if (res?.ok) setMicEnabled(res.micEnabled === true);
+      else if (res?.error) setError(res.error);
     } finally {
       setMicPending(false);
+    }
+  };
+
+  const toggleControl = async () => {
+    if (controlPending) return;
+    setControlPending(true);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: "TOGGLE_REMOTE_CONTROL",
+      })) as { ok: boolean; controlEnabled?: boolean; error?: string };
+      if (res?.ok) setControlEnabled(res.controlEnabled === true);
+      else if (res?.error) setError(res.error);
+    } finally {
+      setControlPending(false);
     }
   };
 
@@ -132,12 +205,23 @@ export function Popup() {
       <div className="h-px bg-slate-200" />
 
       {status === "idle" && (
-        <button
-          onClick={startSharing}
-          className="bg-gradient-to-r from-brand-600 to-accent-500 hover:from-brand-700 hover:to-accent-600 text-white font-semibold py-3 rounded-lg transition shadow-sm"
-        >
-          Start Sharing
-        </button>
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={startSharing}
+            className="bg-gradient-to-r from-brand-600 to-accent-500 hover:from-brand-700 hover:to-accent-600 text-white font-semibold py-3 rounded-lg transition shadow-sm"
+          >
+            Start Sharing
+          </button>
+          <button
+            onClick={startTabSharing}
+            className="bg-white border border-brand-200 hover:bg-brand-50 text-brand-700 text-sm font-medium py-2.5 rounded-lg transition"
+          >
+            Share active tab (with control)
+          </button>
+          <p className="text-[10px] text-surface-muted text-center mt-1">
+            Tab sharing lets viewers click & type in your shared tab.
+          </p>
+        </div>
       )}
 
       {status === "starting" && (
@@ -163,6 +247,12 @@ export function Popup() {
             )}
           </div>
 
+          {tabTitle && (
+            <div className="text-[11px] text-surface-muted truncate">
+              Sharing tab: <span className="text-surface-dark">{tabTitle}</span>
+            </div>
+          )}
+
           <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
             <p className="text-xs text-surface-muted mb-1">Share link</p>
             <p className="font-mono text-xs text-surface-dark break-all">
@@ -186,6 +276,33 @@ export function Popup() {
                 ? "Microphone on"
                 : "Add microphone"}
           </button>
+
+          {controlSupported && (
+            <>
+              <button
+                onClick={toggleControl}
+                disabled={controlPending}
+                className={`w-full text-sm font-medium py-2 rounded-lg transition flex items-center justify-center gap-2 border ${
+                  controlEnabled
+                    ? "bg-amber-500 hover:bg-amber-600 border-amber-500 text-white"
+                    : "bg-white hover:bg-slate-50 border-slate-300 text-surface-dark"
+                } ${controlPending ? "opacity-60 cursor-wait" : ""}`}
+              >
+                <CursorIcon />
+                {controlPending
+                  ? "Switching…"
+                  : controlEnabled
+                    ? "Viewers can control · click to stop"
+                    : "Allow viewer control"}
+              </button>
+              {controlEnabled && (
+                <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 leading-snug">
+                  Chrome shows a yellow banner on the shared tab while remote
+                  control is on. Anything viewers type will go into your tab.
+                </p>
+              )}
+            </>
+          )}
 
           <div className="flex gap-2">
             <button
@@ -226,7 +343,7 @@ export function Popup() {
       )}
 
       <footer className="mt-auto text-[10px] text-surface-muted text-center pt-2">
-        v0.3.0 · No install needed for viewers
+        v0.4.0 · No install needed for viewers
       </footer>
     </div>
   );
@@ -308,9 +425,29 @@ function MicIcon({ active }: { active: boolean }) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <rect x="9" y="2" width="6" height="13" rx="3" fill={active ? "currentColor" : "none"} />
+      <rect
+        x="9"
+        y="2"
+        width="6"
+        height="13"
+        rx="3"
+        fill={active ? "currentColor" : "none"}
+      />
       <path d="M5 11a7 7 0 0 0 14 0" />
       <line x1="12" y1="18" x2="12" y2="22" />
+    </svg>
+  );
+}
+
+function CursorIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+    >
+      <path d="M5 3l14 6-6 2-2 6L5 3z" />
     </svg>
   );
 }

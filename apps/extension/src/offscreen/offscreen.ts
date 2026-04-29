@@ -224,6 +224,12 @@ async function handleSignalMessage(
       if (msg.fromId) handleEngagement(msg.fromId, msg.state);
       break;
 
+    case "control":
+      chrome.runtime
+        .sendMessage({ type: "CONTROL_EVENT", event: msg.event })
+        .catch(() => {});
+      break;
+
     case "ping":
       sendSignal({ type: "pong" });
       break;

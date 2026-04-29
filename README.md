@@ -137,6 +137,7 @@ pnpm build
 - [x] Phase 1: WebRTC screen-share MVP (presenter offscreen doc, multi-viewer)
 - [x] Phase 2: TURN + reliability (auto-reconnect, ICE restart, per-viewer stats, heartbeat)
 - [x] Phase 3: Engagement + audio (mic toggle, viewer attention tracking, inattention notifications)
+- [x] Phase 4: Tab remote control (tab capture + chrome.debugger Input dispatch, viewer overlay)
 - [ ] Phase 3: Engagement tracking + audio
 - [ ] Phase 4: Tab remote control
 - [ ] Phase 5: Projector mode
