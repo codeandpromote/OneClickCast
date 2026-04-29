@@ -5,14 +5,47 @@ import {
   type ControlEvent,
 } from "@oneclickcast/shared";
 
+const WEB_BASE_URL =
+  import.meta.env.VITE_WEB_BASE_URL ??
+  "https://oneclickcast.info-codeandpromote.workers.dev";
 const VIEWER_BASE_URL =
-  import.meta.env.VITE_VIEWER_BASE_URL ?? "https://oneclickcast.pages.dev/room";
+  import.meta.env.VITE_VIEWER_BASE_URL ?? `${WEB_BASE_URL}/room`;
 const SIGNALING_URL =
   import.meta.env.VITE_SIGNALING_URL ??
   "wss://oneclickcast-signaling.workers.dev";
 
 const OFFSCREEN_PATH = "src/offscreen/offscreen.html";
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
+
+type AuthUser = {
+  id: string;
+  email?: string;
+  full_name?: string;
+  avatar_url?: string;
+};
+
+type AuthState = {
+  apiKey: string;
+  user: AuthUser;
+} | null;
+
+let auth: AuthState = null;
+
+async function loadAuth() {
+  const stored = await chrome.storage.local.get("auth");
+  auth = (stored.auth as AuthState) ?? null;
+}
+
+async function saveAuth(next: AuthState) {
+  auth = next;
+  if (next) {
+    await chrome.storage.local.set({ auth: next });
+  } else {
+    await chrome.storage.local.remove("auth");
+  }
+}
+
+void loadAuth();
 
 type ShareMode = "any" | "tab";
 
@@ -64,6 +97,51 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     switch (msg.type) {
       case "GET_SESSION_STATE":
         sendResponse(session);
+        return;
+
+      case "GET_AUTH":
+        sendResponse({ auth });
+        return;
+
+      case "OPEN_SIGN_IN":
+        await chrome.tabs.create({
+          url: `${WEB_BASE_URL}/dashboard/extension-link`,
+        });
+        sendResponse({ ok: true });
+        return;
+
+      case "CONNECT_KEY": {
+        const key = (msg.key as string | undefined)?.trim();
+        if (!key) {
+          sendResponse({ ok: false, error: "Empty key" });
+          return;
+        }
+        try {
+          const httpUrl = SIGNALING_URL.replace(/^ws/, "http").replace(/\/+$/, "");
+          const res = await fetch(
+            `${httpUrl}/whoami?key=${encodeURIComponent(key)}`,
+          );
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
+          const data = (await res.json()) as { user: AuthUser };
+          await saveAuth({ apiKey: key, user: data.user });
+          sendResponse({ ok: true, user: data.user });
+        } catch (e) {
+          sendResponse({
+            ok: false,
+            error: e instanceof Error ? e.message : "Failed to connect",
+          });
+        }
+        return;
+      }
+
+      case "SIGN_OUT":
+        await saveAuth(null);
+        sendResponse({ ok: true });
         return;
 
       case "START_SHARE": {
@@ -286,6 +364,8 @@ async function startShare(): Promise<
     streamId,
     roomId,
     signalingUrl: SIGNALING_URL,
+    apiKey: auth?.apiKey,
+    mode: "any",
   })) as { ok: boolean; error?: string } | undefined;
 
   if (!ack?.ok) {
@@ -327,6 +407,9 @@ async function startTabShare(
     streamId,
     roomId,
     signalingUrl: SIGNALING_URL,
+    apiKey: auth?.apiKey,
+    mode: "tab",
+    tabTitle,
   })) as { ok: boolean; error?: string } | undefined;
 
   if (!ack?.ok) {

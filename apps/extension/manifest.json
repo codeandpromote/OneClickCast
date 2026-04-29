@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "OneClickCast — Instant Screen Sharing",
   "short_name": "OneClickCast",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Share your screen with anyone in one click. No install needed for viewers, even on mobile.",
   "minimum_chrome_version": "116",
   "icons": {
@@ -36,15 +36,15 @@
     "debugger"
   ],
   "host_permissions": [
+    "https://*.workers.dev/*",
+    "wss://*.workers.dev/*",
     "https://oneclickcast.pages.dev/*",
     "https://*.oneclickcast.pages.dev/*",
-    "https://oneclickcast-signaling.workers.dev/*",
-    "wss://oneclickcast-signaling.workers.dev/*",
     "http://localhost/*",
     "ws://localhost/*"
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' wss://oneclickcast-signaling.workers.dev ws://localhost:* https://oneclickcast.pages.dev http://localhost:*"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' https://*.workers.dev wss://*.workers.dev https://oneclickcast.pages.dev http://localhost:* ws://localhost:* https://*.supabase.co"
   },
   "web_accessible_resources": [
     {

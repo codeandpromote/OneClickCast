@@ -139,6 +139,28 @@ The web app uses Supabase for user accounts and (eventually) recording metadata 
 
 Sign-in pages: `/login` (magic link + Google), dashboard: `/dashboard`. The dashboard is empty until Phase 7b wires the signaling worker to write session metadata back to Supabase.
 
+### Phase 7b setup (extension auth + signaling → Supabase)
+
+After `0001_init.sql`, run **`supabase/migrations/0002_extension_api_keys.sql`** in the SQL editor — adds the `extension_api_keys` table and the `create_extension_api_key` / `resolve_extension_api_key` RPCs.
+
+The signaling worker needs the Supabase **service-role** key to write session rows. Set it once via wrangler:
+
+```bash
+cd apps/signaling
+pnpm exec wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+# Paste the service_role key from
+# https://supabase.com/dashboard/project/_/settings/api (under "service_role")
+pnpm deploy
+```
+
+`SUPABASE_URL` is already set in `wrangler.toml` (public, safe to commit).
+
+**End-user flow once deployed:**
+1. Sign in to the dashboard at `/login`
+2. Go to `/dashboard/extension-link` → click **Generate new key** → copy the `occ_…` key
+3. Open the OneClickCast extension popup → paste key → **Connect**
+4. Future shares auto-populate in `/dashboard`
+
 ### Deploying the web app
 
 ```bash
@@ -167,12 +189,12 @@ pnpm build
 - [x] Phase 5: Projector mode (8 Mbps bitrate boost, motion content hint, H.264 codec preference)
 - [x] Phase 6a: Local recording (MediaRecorder → WebM, auto-download on stop, live duration in popup)
 - [x] Phase 7a: Web auth + dashboard (Supabase magic link + Google OAuth, protected /dashboard, empty share-history table)
+- [x] Phase 7b: Extension API keys + signaling worker writes share_sessions to Supabase (dashboard populates with real history)
 - [ ] Phase 3: Engagement tracking + audio
 - [ ] Phase 4: Tab remote control
 - [ ] Phase 5: Projector mode
 - [ ] Phase 6: Recording + cloud storage
-- [ ] Phase 7b: Extension sign-in + signaling worker writes session metadata to Supabase
-- [ ] Phase 6b: Cloud recordings (Supabase + R2 + ffmpeg transcoding) — depends on Phase 7b
+- [ ] Phase 6b: Cloud recordings (Supabase + R2 + ffmpeg transcoding)
 - [ ] Phase 8: Polish + Chrome Web Store launch
 
 ## License

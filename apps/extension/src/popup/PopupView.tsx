@@ -3,6 +3,18 @@ import type { ViewerStats, ViewerEngagement } from "@oneclickcast/shared";
 
 type Status = "idle" | "starting" | "active" | "error";
 
+interface AuthUser {
+  id: string;
+  email?: string;
+  full_name?: string;
+  avatar_url?: string;
+}
+
+interface AuthState {
+  apiKey: string;
+  user: AuthUser;
+}
+
 interface SessionInfo {
   active: boolean;
   mode?: "any" | "tab";
@@ -49,6 +61,47 @@ export function Popup() {
   const [controlPending, setControlPending] = useState(false);
   const [tabTitle, setTabTitle] = useState<string | undefined>();
   const [copied, setCopied] = useState(false);
+
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [keyInput, setKeyInput] = useState("");
+  const [connectPending, setConnectPending] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    chrome.runtime.sendMessage({ type: "GET_AUTH" }).then((res) => {
+      const a = (res as { auth: AuthState | null } | undefined)?.auth;
+      if (a) setAuthUser(a.user);
+    });
+  }, []);
+
+  const openSignIn = async () => {
+    await chrome.runtime.sendMessage({ type: "OPEN_SIGN_IN" });
+  };
+
+  const connectKey = async () => {
+    if (!keyInput.trim() || connectPending) return;
+    setConnectPending(true);
+    setAuthError(null);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: "CONNECT_KEY",
+        key: keyInput.trim(),
+      })) as { ok: boolean; user?: AuthUser; error?: string };
+      if (res?.ok && res.user) {
+        setAuthUser(res.user);
+        setKeyInput("");
+      } else {
+        setAuthError(res?.error ?? "Failed to connect");
+      }
+    } finally {
+      setConnectPending(false);
+    }
+  };
+
+  const signOut = async () => {
+    await chrome.runtime.sendMessage({ type: "SIGN_OUT" });
+    setAuthUser(null);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -260,6 +313,19 @@ export function Popup() {
 
       <div className="h-px bg-slate-200" />
 
+      <AuthSection
+        user={authUser}
+        keyInput={keyInput}
+        onKeyInput={setKeyInput}
+        onOpenSignIn={openSignIn}
+        onConnect={connectKey}
+        onSignOut={signOut}
+        connectPending={connectPending}
+        error={authError}
+      />
+
+      <div className="h-px bg-slate-200" />
+
       {status === "idle" && (
         <div className="flex flex-col gap-2">
           <button
@@ -443,7 +509,7 @@ export function Popup() {
       )}
 
       <footer className="mt-auto text-[10px] text-surface-muted text-center pt-2">
-        v0.6.0 · No install needed for viewers
+        v0.7.0 · No install needed for viewers
       </footer>
     </div>
   );
@@ -597,6 +663,102 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function AuthSection({
+  user,
+  keyInput,
+  onKeyInput,
+  onOpenSignIn,
+  onConnect,
+  onSignOut,
+  connectPending,
+  error,
+}: {
+  user: AuthUser | null;
+  keyInput: string;
+  onKeyInput: (s: string) => void;
+  onOpenSignIn: () => void;
+  onConnect: () => void;
+  onSignOut: () => void;
+  connectPending: boolean;
+  error: string | null;
+}) {
+  if (user) {
+    const display = user.full_name || user.email || "Connected";
+    const initial = display.charAt(0).toUpperCase();
+    return (
+      <div className="flex items-center justify-between text-xs">
+        <div className="flex items-center gap-2">
+          {user.avatar_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={user.avatar_url}
+              alt=""
+              className="w-6 h-6 rounded-full"
+            />
+          ) : (
+            <div className="w-6 h-6 rounded-full bg-brand-100 text-brand-700 text-[11px] font-semibold flex items-center justify-center">
+              {initial}
+            </div>
+          )}
+          <div className="flex flex-col leading-tight">
+            <span className="text-surface-dark font-medium truncate max-w-[180px]">
+              {display}
+            </span>
+            <span className="text-surface-muted text-[10px]">
+              Sessions saved to dashboard
+            </span>
+          </div>
+        </div>
+        <button
+          onClick={onSignOut}
+          className="text-surface-muted hover:text-surface-dark transition"
+        >
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-[11px] text-surface-muted leading-snug">
+        Sign in to track your share history. Otherwise sessions stay
+        anonymous.
+      </p>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          placeholder="Paste key here"
+          value={keyInput}
+          onChange={(e) => onKeyInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onConnect();
+          }}
+          className="flex-1 text-xs font-mono bg-white border border-slate-300 rounded-md px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500"
+        />
+        <button
+          onClick={onConnect}
+          disabled={connectPending || !keyInput.trim()}
+          className="bg-brand-600 hover:bg-brand-700 text-white text-xs font-medium px-3 py-1.5 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {connectPending ? "…" : "Connect"}
+        </button>
+      </div>
+      <button
+        onClick={onOpenSignIn}
+        className="text-xs text-brand-600 hover:text-brand-700 transition self-start"
+      >
+        Get a key from the dashboard →
+      </button>
+      {error && (
+        <p className="text-[11px] text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function Logo() {

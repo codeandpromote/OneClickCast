@@ -23,11 +23,19 @@ export default async function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <section>
-        <h1 className="text-2xl font-bold text-surface-dark">Dashboard</h1>
-        <p className="text-sm text-surface-muted mt-1">
-          Your share history and recordings.
-        </p>
+      <section className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-surface-dark">Dashboard</h1>
+          <p className="text-sm text-surface-muted mt-1">
+            Your share history and recordings.
+          </p>
+        </div>
+        <a
+          href="/dashboard/extension-link"
+          className="bg-white hover:bg-slate-50 border border-slate-300 text-surface-dark text-sm font-medium px-4 py-2 rounded-lg transition whitespace-nowrap"
+        >
+          Connect extension
+        </a>
       </section>
 
       <section className="grid grid-cols-3 gap-3">

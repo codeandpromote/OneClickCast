@@ -30,6 +30,9 @@ interface OffscreenStartMessage {
   streamId: string;
   roomId: string;
   signalingUrl: string;
+  apiKey?: string;
+  mode?: "any" | "tab";
+  tabTitle?: string;
 }
 
 interface OffscreenStopMessage {
@@ -79,6 +82,9 @@ let session: {
   roomId: string;
   signalingUrl: string;
   iceServers: IceServer[];
+  apiKey?: string;
+  mode: "any" | "tab";
+  tabTitle?: string;
 } | null = null;
 let active = false;
 let reconnectAttempts = 0;
@@ -96,7 +102,14 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
   (async () => {
     try {
       if (msg.type === "START_CAPTURE") {
-        await startCapture(msg.streamId, msg.roomId, msg.signalingUrl);
+        await startCapture(
+          msg.streamId,
+          msg.roomId,
+          msg.signalingUrl,
+          msg.apiKey,
+          msg.mode ?? "any",
+          msg.tabTitle,
+        );
         sendResponse({ ok: true });
       } else if (msg.type === "STOP_CAPTURE") {
         await stopCapture();
@@ -124,6 +137,9 @@ async function startCapture(
   streamId: string,
   roomId: string,
   signalingUrl: string,
+  apiKey?: string,
+  mode: "any" | "tab" = "any",
+  tabTitle?: string,
 ) {
   if (active) stopCapture();
 
@@ -157,7 +173,7 @@ async function startCapture(
   }
 
   const iceServers = await fetchIceServers(signalingUrl);
-  session = { roomId, signalingUrl, iceServers };
+  session = { roomId, signalingUrl, iceServers, apiKey, mode, tabTitle };
   active = true;
 
   connectSignaling();
@@ -183,7 +199,12 @@ async function fetchIceServers(signalingUrl: string): Promise<IceServer[]> {
 function connectSignaling() {
   if (!session || !active) return;
 
-  const url = `${session.signalingUrl}/room/${session.roomId}?role=presenter`;
+  const params = new URLSearchParams();
+  params.set("role", "presenter");
+  params.set("mode", session.mode);
+  if (session.apiKey) params.set("key", session.apiKey);
+  if (session.tabTitle) params.set("tab", session.tabTitle);
+  const url = `${session.signalingUrl}/room/${session.roomId}?${params.toString()}`;
   ws = new WebSocket(url);
 
   ws.addEventListener("open", () => {
@@ -527,6 +548,9 @@ async function toggleRecording(): Promise<{
     return { recording: false };
   }
   const ok = startRecording();
+  if (ok) {
+    sendSignal({ type: "presenter-feature", feature: "recording", on: true });
+  }
   return { recording: ok, startedAt: ok ? recordingStartedAt : undefined };
 }
 
