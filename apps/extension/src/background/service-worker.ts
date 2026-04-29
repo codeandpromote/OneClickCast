@@ -26,6 +26,7 @@ type SessionState = {
   viewerStats: ViewerStats[];
   engagement: ViewerEngagement[];
   micEnabled: boolean;
+  projectorMode: boolean;
   controlSupported: boolean;
   controlEnabled: boolean;
   sharedTabId?: number;
@@ -38,6 +39,7 @@ const initialSession = (): SessionState => ({
   viewerStats: [],
   engagement: [],
   micEnabled: false,
+  projectorMode: false,
   controlSupported: false,
   controlEnabled: false,
 });
@@ -130,6 +132,36 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           sendResponse({
             ok: false,
             error: e instanceof Error ? e.message : "Mic toggle failed",
+          });
+        }
+        return;
+      }
+
+      case "TOGGLE_PROJECTOR_MODE": {
+        try {
+          const ack = (await chrome.runtime.sendMessage({
+            target: "offscreen",
+            type: "TOGGLE_PROJECTOR_MODE",
+          })) as
+            | { ok: boolean; projectorMode?: boolean; error?: string }
+            | undefined;
+          if (ack?.ok) {
+            session.projectorMode = ack.projectorMode === true;
+            await persistSession();
+            sendResponse({
+              ok: true,
+              projectorMode: session.projectorMode,
+            });
+          } else {
+            sendResponse({
+              ok: false,
+              error: ack?.error ?? "Projector toggle failed",
+            });
+          }
+        } catch (e) {
+          sendResponse({
+            ok: false,
+            error: e instanceof Error ? e.message : "Projector toggle failed",
           });
         }
         return;

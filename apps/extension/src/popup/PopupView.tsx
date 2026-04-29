@@ -11,6 +11,7 @@ interface SessionInfo {
   viewerStats: ViewerStats[];
   engagement: ViewerEngagement[];
   micEnabled: boolean;
+  projectorMode: boolean;
   controlSupported: boolean;
   controlEnabled: boolean;
   sharedTabTitle?: string;
@@ -27,6 +28,8 @@ export function Popup() {
   const [engagement, setEngagement] = useState<ViewerEngagement[]>([]);
   const [micEnabled, setMicEnabled] = useState(false);
   const [micPending, setMicPending] = useState(false);
+  const [projectorMode, setProjectorMode] = useState(false);
+  const [projectorPending, setProjectorPending] = useState(false);
   const [controlSupported, setControlSupported] = useState(false);
   const [controlEnabled, setControlEnabled] = useState(false);
   const [controlPending, setControlPending] = useState(false);
@@ -48,6 +51,7 @@ export function Popup() {
         setViewerStats(res.viewerStats ?? []);
         setEngagement(res.engagement ?? []);
         setMicEnabled(res.micEnabled === true);
+        setProjectorMode(res.projectorMode === true);
         setControlSupported(res.controlSupported === true);
         setControlEnabled(res.controlEnabled === true);
         setTabTitle(res.sharedTabTitle);
@@ -58,6 +62,7 @@ export function Popup() {
         setViewerStats([]);
         setEngagement([]);
         setMicEnabled(false);
+        setProjectorMode(false);
         setControlSupported(false);
         setControlEnabled(false);
         setTabTitle(undefined);
@@ -145,6 +150,7 @@ export function Popup() {
     setViewerStats([]);
     setEngagement([]);
     setMicEnabled(false);
+    setProjectorMode(false);
     setControlEnabled(false);
     setControlSupported(false);
     setTabTitle(undefined);
@@ -168,6 +174,20 @@ export function Popup() {
       else if (res?.error) setError(res.error);
     } finally {
       setMicPending(false);
+    }
+  };
+
+  const toggleProjector = async () => {
+    if (projectorPending) return;
+    setProjectorPending(true);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: "TOGGLE_PROJECTOR_MODE",
+      })) as { ok: boolean; projectorMode?: boolean; error?: string };
+      if (res?.ok) setProjectorMode(res.projectorMode === true);
+      else if (res?.error) setError(res.error);
+    } finally {
+      setProjectorPending(false);
     }
   };
 
@@ -260,22 +280,37 @@ export function Popup() {
             </p>
           </div>
 
-          <button
-            onClick={toggleMic}
-            disabled={micPending}
-            className={`w-full text-sm font-medium py-2 rounded-lg transition flex items-center justify-center gap-2 border ${
-              micEnabled
-                ? "bg-brand-600 hover:bg-brand-700 border-brand-600 text-white"
-                : "bg-white hover:bg-slate-50 border-slate-300 text-surface-dark"
-            } ${micPending ? "opacity-60 cursor-wait" : ""}`}
-          >
-            <MicIcon active={micEnabled} />
-            {micPending
-              ? "Switching…"
-              : micEnabled
-                ? "Microphone on"
-                : "Add microphone"}
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={toggleMic}
+              disabled={micPending}
+              className={`text-sm font-medium py-2 rounded-lg transition flex items-center justify-center gap-2 border ${
+                micEnabled
+                  ? "bg-brand-600 hover:bg-brand-700 border-brand-600 text-white"
+                  : "bg-white hover:bg-slate-50 border-slate-300 text-surface-dark"
+              } ${micPending ? "opacity-60 cursor-wait" : ""}`}
+            >
+              <MicIcon active={micEnabled} />
+              {micPending ? "…" : micEnabled ? "Mic on" : "Mic"}
+            </button>
+            <button
+              onClick={toggleProjector}
+              disabled={projectorPending}
+              title="Boosts bitrate to 8 Mbps and prefers H.264 — best for sharing video clips"
+              className={`text-sm font-medium py-2 rounded-lg transition flex items-center justify-center gap-2 border ${
+                projectorMode
+                  ? "bg-accent-500 hover:bg-accent-600 border-accent-500 text-white"
+                  : "bg-white hover:bg-slate-50 border-slate-300 text-surface-dark"
+              } ${projectorPending ? "opacity-60 cursor-wait" : ""}`}
+            >
+              <ProjectorIcon active={projectorMode} />
+              {projectorPending
+                ? "…"
+                : projectorMode
+                  ? "Projector on"
+                  : "Projector"}
+            </button>
+          </div>
 
           {controlSupported && (
             <>
@@ -343,7 +378,7 @@ export function Popup() {
       )}
 
       <footer className="mt-auto text-[10px] text-surface-muted text-center pt-2">
-        v0.4.0 · No install needed for viewers
+        v0.5.0 · No install needed for viewers
       </footer>
     </div>
   );
@@ -448,6 +483,24 @@ function CursorIcon() {
       fill="currentColor"
     >
       <path d="M5 3l14 6-6 2-2 6L5 3z" />
+    </svg>
+  );
+}
+
+function ProjectorIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill={active ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polygon points="23 7 16 12 23 17 23 7" />
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
     </svg>
   );
 }

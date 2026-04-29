@@ -138,6 +138,7 @@ pnpm build
 - [x] Phase 2: TURN + reliability (auto-reconnect, ICE restart, per-viewer stats, heartbeat)
 - [x] Phase 3: Engagement + audio (mic toggle, viewer attention tracking, inattention notifications)
 - [x] Phase 4: Tab remote control (tab capture + chrome.debugger Input dispatch, viewer overlay)
+- [x] Phase 5: Projector mode (8 Mbps bitrate boost, motion content hint, H.264 codec preference)
 - [ ] Phase 3: Engagement tracking + audio
 - [ ] Phase 4: Tab remote control
 - [ ] Phase 5: Projector mode

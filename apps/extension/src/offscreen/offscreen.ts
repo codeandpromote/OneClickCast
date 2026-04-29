@@ -19,6 +19,11 @@ const STATS_INTERVAL_MS = 3_000;
 const PRESENTER_PING_INTERVAL_MS = 25_000;
 const INATTENTION_THRESHOLD_MS = 10_000;
 
+const NORMAL_MAX_BITRATE = 2_500_000;
+const PROJECTOR_MAX_BITRATE = 8_000_000;
+const NORMAL_MAX_FRAMERATE = 30;
+const PROJECTOR_MAX_FRAMERATE = 60;
+
 interface OffscreenStartMessage {
   target: "offscreen";
   type: "START_CAPTURE";
@@ -37,10 +42,16 @@ interface OffscreenToggleMicMessage {
   type: "TOGGLE_MIC";
 }
 
+interface OffscreenToggleProjectorMessage {
+  target: "offscreen";
+  type: "TOGGLE_PROJECTOR_MODE";
+}
+
 type OffscreenMessage =
   | OffscreenStartMessage
   | OffscreenStopMessage
-  | OffscreenToggleMicMessage;
+  | OffscreenToggleMicMessage
+  | OffscreenToggleProjectorMessage;
 
 interface PeerEntry {
   pc: RTCPeerConnection;
@@ -52,6 +63,7 @@ interface PeerEntry {
 
 let stream: MediaStream | null = null;
 let micStream: MediaStream | null = null;
+let projectorMode = false;
 let ws: WebSocket | null = null;
 let session: {
   roomId: string;
@@ -82,6 +94,9 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
       } else if (msg.type === "TOGGLE_MIC") {
         const enabled = await toggleMic();
         sendResponse({ ok: true, micEnabled: enabled });
+      } else if (msg.type === "TOGGLE_PROJECTOR_MODE") {
+        const enabled = await toggleProjectorMode();
+        sendResponse({ ok: true, projectorMode: enabled });
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : "Unknown error";
@@ -294,6 +309,11 @@ async function handleViewerJoined(viewerId: string) {
     if (micTrack) pc.addTrack(micTrack, stream);
   }
 
+  if (projectorMode) {
+    preferH264(pc);
+    await applyEncoderParams(pc, true);
+  }
+
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       sendSignal({
@@ -485,6 +505,67 @@ function notifyViewerCount(count: number) {
     .catch(() => {});
 }
 
+async function toggleProjectorMode(): Promise<boolean> {
+  if (!stream) return projectorMode;
+  projectorMode = !projectorMode;
+
+  const videoTrack = stream.getVideoTracks()[0];
+  if (videoTrack) {
+    videoTrack.contentHint = projectorMode ? "motion" : "detail";
+  }
+
+  for (const [viewerId, entry] of peers.entries()) {
+    if (projectorMode) preferH264(entry.pc);
+    await applyEncoderParams(entry.pc, projectorMode);
+    await sendOffer(viewerId, false);
+  }
+
+  return projectorMode;
+}
+
+function preferH264(pc: RTCPeerConnection) {
+  const caps = RTCRtpSender.getCapabilities("video");
+  if (!caps) return;
+  const h264 = caps.codecs.filter(
+    (c) => c.mimeType.toLowerCase() === "video/h264",
+  );
+  if (h264.length === 0) return;
+  const others = caps.codecs.filter(
+    (c) => c.mimeType.toLowerCase() !== "video/h264",
+  );
+  const reordered = [...h264, ...others];
+
+  for (const t of pc.getTransceivers()) {
+    if (t.sender.track?.kind === "video") {
+      try {
+        t.setCodecPreferences(reordered);
+      } catch (err) {
+        console.warn("[offscreen] setCodecPreferences failed", err);
+      }
+    }
+  }
+}
+
+async function applyEncoderParams(pc: RTCPeerConnection, projector: boolean) {
+  const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+  if (!sender) return;
+  const params = sender.getParameters();
+  if (!params.encodings || params.encodings.length === 0) {
+    params.encodings = [{}];
+  }
+  params.encodings[0]!.maxBitrate = projector
+    ? PROJECTOR_MAX_BITRATE
+    : NORMAL_MAX_BITRATE;
+  params.encodings[0]!.maxFramerate = projector
+    ? PROJECTOR_MAX_FRAMERATE
+    : NORMAL_MAX_FRAMERATE;
+  try {
+    await sender.setParameters(params);
+  } catch (err) {
+    console.warn("[offscreen] setParameters failed", err);
+  }
+}
+
 async function toggleMic(): Promise<boolean> {
   if (!stream) return false;
   if (micStream) {
@@ -568,6 +649,7 @@ function stopCapture() {
     micStream = null;
   }
 
+  projectorMode = false;
   session = null;
   reconnectAttempts = 0;
 }
