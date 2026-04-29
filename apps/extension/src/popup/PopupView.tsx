@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ViewerStats } from "@oneclickcast/shared";
+import type { ViewerStats, ViewerEngagement } from "@oneclickcast/shared";
 
 type Status = "idle" | "starting" | "active" | "error";
 
@@ -8,6 +8,8 @@ interface SessionInfo {
   shareLink?: string;
   viewerCount: number;
   viewerStats: ViewerStats[];
+  engagement: ViewerEngagement[];
+  micEnabled: boolean;
 }
 
 const STATS_POLL_MS = 1000;
@@ -18,6 +20,9 @@ export function Popup() {
   const [error, setError] = useState<string | null>(null);
   const [viewerCount, setViewerCount] = useState(0);
   const [viewerStats, setViewerStats] = useState<ViewerStats[]>([]);
+  const [engagement, setEngagement] = useState<ViewerEngagement[]>([]);
+  const [micEnabled, setMicEnabled] = useState(false);
+  const [micPending, setMicPending] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -33,11 +38,15 @@ export function Popup() {
         setShareLink(res.shareLink ?? null);
         setViewerCount(res.viewerCount ?? 0);
         setViewerStats(res.viewerStats ?? []);
+        setEngagement(res.engagement ?? []);
+        setMicEnabled(res.micEnabled === true);
       } else {
         setStatus((s) => (s === "starting" ? s : "idle"));
         setShareLink(null);
         setViewerCount(0);
         setViewerStats([]);
+        setEngagement([]);
+        setMicEnabled(false);
       }
     };
 
@@ -75,6 +84,8 @@ export function Popup() {
     setShareLink(null);
     setViewerCount(0);
     setViewerStats([]);
+    setEngagement([]);
+    setMicEnabled(false);
   };
 
   const copyLink = async () => {
@@ -83,6 +94,26 @@ export function Popup() {
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
+
+  const toggleMic = async () => {
+    if (micPending) return;
+    setMicPending(true);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: "TOGGLE_MIC",
+      })) as { ok: boolean; micEnabled?: boolean; error?: string };
+      if (res?.ok) {
+        setMicEnabled(res.micEnabled === true);
+      } else if (res?.error) {
+        setError(res.error);
+      }
+    } finally {
+      setMicPending(false);
+    }
+  };
+
+  const watchingCount = engagement.filter((e) => e.state === "watching").length;
+  const awayCount = engagement.filter((e) => e.state !== "watching").length;
 
   return (
     <div className="flex flex-col p-5 gap-4">
@@ -117,9 +148,19 @@ export function Popup() {
 
       {status === "active" && shareLink && (
         <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2 text-xs text-emerald-600 font-medium">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Live · {viewerCount} viewer{viewerCount === 1 ? "" : "s"}
+          <div className="flex items-center justify-between text-xs font-medium">
+            <div className="flex items-center gap-2 text-emerald-600">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Live · {viewerCount} viewer{viewerCount === 1 ? "" : "s"}
+            </div>
+            {viewerCount > 0 && (
+              <div className="text-surface-muted">
+                {watchingCount} watching
+                {awayCount > 0 && (
+                  <span className="text-amber-600"> · {awayCount} away</span>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
@@ -128,6 +169,23 @@ export function Popup() {
               {shareLink}
             </p>
           </div>
+
+          <button
+            onClick={toggleMic}
+            disabled={micPending}
+            className={`w-full text-sm font-medium py-2 rounded-lg transition flex items-center justify-center gap-2 border ${
+              micEnabled
+                ? "bg-brand-600 hover:bg-brand-700 border-brand-600 text-white"
+                : "bg-white hover:bg-slate-50 border-slate-300 text-surface-dark"
+            } ${micPending ? "opacity-60 cursor-wait" : ""}`}
+          >
+            <MicIcon active={micEnabled} />
+            {micPending
+              ? "Switching…"
+              : micEnabled
+                ? "Microphone on"
+                : "Add microphone"}
+          </button>
 
           <div className="flex gap-2">
             <button
@@ -147,10 +205,14 @@ export function Popup() {
           {viewerStats.length > 0 && (
             <div className="flex flex-col gap-1.5 mt-1">
               <p className="text-[10px] uppercase tracking-wide text-surface-muted font-semibold">
-                Connection quality
+                Viewers
               </p>
               {viewerStats.map((v) => (
-                <ViewerStatRow key={v.viewerId} stats={v} />
+                <ViewerRow
+                  key={v.viewerId}
+                  stats={v}
+                  engagement={engagement.find((e) => e.viewerId === v.viewerId)}
+                />
               ))}
             </div>
           )}
@@ -164,13 +226,19 @@ export function Popup() {
       )}
 
       <footer className="mt-auto text-[10px] text-surface-muted text-center pt-2">
-        v0.2.0 · No install needed for viewers
+        v0.3.0 · No install needed for viewers
       </footer>
     </div>
   );
 }
 
-function ViewerStatRow({ stats }: { stats: ViewerStats }) {
+function ViewerRow({
+  stats,
+  engagement,
+}: {
+  stats: ViewerStats;
+  engagement?: ViewerEngagement;
+}) {
   const dotClass =
     stats.quality === "good"
       ? "bg-emerald-500"
@@ -186,11 +254,14 @@ function ViewerStatRow({ stats }: { stats: ViewerStats }) {
       ? `${(stats.bitrateKbps / 1000).toFixed(1)} Mbps`
       : `${stats.bitrateKbps} kbps`;
 
+  const engaged = !engagement || engagement.state === "watching";
+
   return (
     <div className="flex items-center justify-between text-[11px] bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5">
       <div className="flex items-center gap-2">
         <span className={`w-1.5 h-1.5 rounded-full ${dotClass}`} />
         <span className="font-mono text-surface-dark">{shortId}</span>
+        <EngagementBadge engaged={engaged} state={engagement?.state} />
       </div>
       <div className="flex items-center gap-3 text-surface-muted">
         <span>{bitrate}</span>
@@ -198,6 +269,49 @@ function ViewerStatRow({ stats }: { stats: ViewerStats }) {
         <span>{stats.packetLossPct}% loss</span>
       </div>
     </div>
+  );
+}
+
+function EngagementBadge({
+  engaged,
+  state,
+}: {
+  engaged: boolean;
+  state?: "watching" | "tabbed-away" | "minimized";
+}) {
+  if (engaged) {
+    return (
+      <span className="text-emerald-600 text-[10px]" title="Watching">
+        ●
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-amber-600 text-[10px]"
+      title={state === "minimized" ? "Window minimized" : "Tabbed away"}
+    >
+      zZ
+    </span>
+  );
+}
+
+function MicIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="9" y="2" width="6" height="13" rx="3" fill={active ? "currentColor" : "none"} />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+    </svg>
   );
 }
 

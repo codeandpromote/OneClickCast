@@ -4,6 +4,8 @@ import type {
   ViewerStats,
   PeerConnectionStateLike,
   ConnectionQuality,
+  EngagementState,
+  ViewerEngagement,
 } from "@oneclickcast/shared";
 
 const FALLBACK_ICE_SERVERS: IceServer[] = [
@@ -15,6 +17,7 @@ const RECONNECT_INITIAL_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 const STATS_INTERVAL_MS = 3_000;
 const PRESENTER_PING_INTERVAL_MS = 25_000;
+const INATTENTION_THRESHOLD_MS = 10_000;
 
 interface OffscreenStartMessage {
   target: "offscreen";
@@ -29,7 +32,15 @@ interface OffscreenStopMessage {
   type: "STOP_CAPTURE";
 }
 
-type OffscreenMessage = OffscreenStartMessage | OffscreenStopMessage;
+interface OffscreenToggleMicMessage {
+  target: "offscreen";
+  type: "TOGGLE_MIC";
+}
+
+type OffscreenMessage =
+  | OffscreenStartMessage
+  | OffscreenStopMessage
+  | OffscreenToggleMicMessage;
 
 interface PeerEntry {
   pc: RTCPeerConnection;
@@ -40,6 +51,7 @@ interface PeerEntry {
 }
 
 let stream: MediaStream | null = null;
+let micStream: MediaStream | null = null;
 let ws: WebSocket | null = null;
 let session: {
   roomId: string;
@@ -52,6 +64,8 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let statsTimer: ReturnType<typeof setInterval> | null = null;
 let pingTimer: ReturnType<typeof setInterval> | null = null;
 const peers = new Map<string, PeerEntry>();
+const engagement = new Map<string, ViewerEngagement>();
+const inattentionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
   const msg = raw as OffscreenMessage;
@@ -65,6 +79,9 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
       } else if (msg.type === "STOP_CAPTURE") {
         stopCapture();
         sendResponse({ ok: true });
+      } else if (msg.type === "TOGGLE_MIC") {
+        const enabled = await toggleMic();
+        sendResponse({ ok: true, micEnabled: enabled });
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : "Unknown error";
@@ -203,6 +220,10 @@ async function handleSignalMessage(
       if (msg.fromId) await handleViewerIce(msg.fromId, msg.candidate);
       break;
 
+    case "engagement":
+      if (msg.fromId) handleEngagement(msg.fromId, msg.state);
+      break;
+
     case "ping":
       sendSignal({ type: "pong" });
       break;
@@ -211,6 +232,41 @@ async function handleSignalMessage(
       console.error("[offscreen] Signaling error:", msg.error);
       break;
   }
+}
+
+function handleEngagement(viewerId: string, state: EngagementState) {
+  engagement.set(viewerId, { viewerId, state, changedAt: Date.now() });
+
+  const existing = inattentionTimers.get(viewerId);
+  if (existing) {
+    clearTimeout(existing);
+    inattentionTimers.delete(viewerId);
+  }
+
+  if (state === "tabbed-away" || state === "minimized") {
+    const timer = setTimeout(() => {
+      inattentionTimers.delete(viewerId);
+      chrome.runtime
+        .sendMessage({ type: "INATTENTION_ALERT", viewerId, state })
+        .catch(() => {});
+    }, INATTENTION_THRESHOLD_MS);
+    inattentionTimers.set(viewerId, timer);
+  } else if (state === "watching") {
+    chrome.runtime
+      .sendMessage({ type: "VIEWER_RETURNED", viewerId })
+      .catch(() => {});
+  }
+
+  notifyEngagement();
+}
+
+function notifyEngagement() {
+  chrome.runtime
+    .sendMessage({
+      type: "VIEWER_ENGAGEMENT_UPDATE",
+      engagement: Array.from(engagement.values()),
+    })
+    .catch(() => {});
 }
 
 async function handleViewerJoined(viewerId: string) {
@@ -226,6 +282,11 @@ async function handleViewerJoined(viewerId: string) {
   });
 
   for (const track of stream.getTracks()) pc.addTrack(track, stream);
+
+  if (micStream) {
+    const micTrack = micStream.getAudioTracks()[0];
+    if (micTrack) pc.addTrack(micTrack, stream);
+  }
 
   pc.onicecandidate = (event) => {
     if (event.candidate) {
@@ -308,6 +369,13 @@ function handleViewerLeft(viewerId: string) {
     entry.pc.close();
     peers.delete(viewerId);
   }
+  engagement.delete(viewerId);
+  const t = inattentionTimers.get(viewerId);
+  if (t) {
+    clearTimeout(t);
+    inattentionTimers.delete(viewerId);
+  }
+  notifyEngagement();
 }
 
 function sendSignal(payload: object) {
@@ -411,6 +479,55 @@ function notifyViewerCount(count: number) {
     .catch(() => {});
 }
 
+async function toggleMic(): Promise<boolean> {
+  if (!stream) return false;
+  if (micStream) {
+    await disableMic();
+    return false;
+  }
+  await enableMic();
+  return true;
+}
+
+async function enableMic() {
+  if (micStream || !stream) return;
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+    video: false,
+  });
+  const micTrack = micStream.getAudioTracks()[0];
+  if (!micTrack) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+    return;
+  }
+
+  for (const [viewerId, entry] of peers.entries()) {
+    entry.pc.addTrack(micTrack, stream);
+    await sendOffer(viewerId, false);
+  }
+}
+
+async function disableMic() {
+  if (!micStream) return;
+  const micTrack = micStream.getAudioTracks()[0];
+
+  for (const [viewerId, entry] of peers.entries()) {
+    if (micTrack) {
+      const sender = entry.pc.getSenders().find((s) => s.track === micTrack);
+      if (sender) entry.pc.removeTrack(sender);
+    }
+    await sendOffer(viewerId, false);
+  }
+
+  for (const t of micStream.getTracks()) t.stop();
+  micStream = null;
+}
+
 function stopCapture() {
   active = false;
 
@@ -420,6 +537,10 @@ function stopCapture() {
   }
   stopStatsLoop();
   stopPingLoop();
+
+  for (const t of inattentionTimers.values()) clearTimeout(t);
+  inattentionTimers.clear();
+  engagement.clear();
 
   for (const entry of peers.values()) entry.pc.close();
   peers.clear();
@@ -434,6 +555,11 @@ function stopCapture() {
   if (stream) {
     for (const track of stream.getTracks()) track.stop();
     stream = null;
+  }
+
+  if (micStream) {
+    for (const track of micStream.getTracks()) track.stop();
+    micStream = null;
   }
 
   session = null;

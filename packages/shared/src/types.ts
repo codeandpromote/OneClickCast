@@ -34,10 +34,18 @@ export interface IceCandidateMessage {
   fromId?: string;
 }
 
+export type EngagementState = "watching" | "tabbed-away" | "minimized";
+
 export interface EngagementMessage {
   type: "engagement";
-  state: "watching" | "tabbed-away" | "minimized";
+  state: EngagementState;
   fromId?: string;
+}
+
+export interface ViewerEngagement {
+  viewerId: string;
+  state: EngagementState;
+  changedAt: number;
 }
 
 export interface ControlMessage {

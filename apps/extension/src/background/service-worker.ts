@@ -1,4 +1,8 @@
-import { generateRoomId, type ViewerStats } from "@oneclickcast/shared";
+import {
+  generateRoomId,
+  type ViewerStats,
+  type ViewerEngagement,
+} from "@oneclickcast/shared";
 
 const VIEWER_BASE_URL =
   import.meta.env.VITE_VIEWER_BASE_URL ?? "https://oneclickcast.pages.dev/room";
@@ -15,9 +19,19 @@ type SessionState = {
   viewerCount: number;
   startedAt?: number;
   viewerStats: ViewerStats[];
+  engagement: ViewerEngagement[];
+  micEnabled: boolean;
 };
 
-let session: SessionState = { active: false, viewerCount: 0, viewerStats: [] };
+const initialSession = (): SessionState => ({
+  active: false,
+  viewerCount: 0,
+  viewerStats: [],
+  engagement: [],
+  micEnabled: false,
+});
+
+let session: SessionState = initialSession();
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.target === "offscreen") return;
@@ -57,6 +71,47 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
         return;
 
+      case "VIEWER_ENGAGEMENT_UPDATE":
+        session.engagement = (msg.engagement ?? []) as ViewerEngagement[];
+        sendResponse({ ok: true });
+        return;
+
+      case "INATTENTION_ALERT":
+        await fireInattentionNotification(msg.viewerId);
+        sendResponse({ ok: true });
+        return;
+
+      case "VIEWER_RETURNED":
+        try {
+          chrome.notifications.clear(`inattention-${msg.viewerId}`);
+        } catch {}
+        sendResponse({ ok: true });
+        return;
+
+      case "TOGGLE_MIC": {
+        try {
+          const ack = (await chrome.runtime.sendMessage({
+            target: "offscreen",
+            type: "TOGGLE_MIC",
+          })) as
+            | { ok: boolean; micEnabled?: boolean; error?: string }
+            | undefined;
+          if (ack?.ok) {
+            session.micEnabled = ack.micEnabled === true;
+            await persistSession();
+            sendResponse({ ok: true, micEnabled: session.micEnabled });
+          } else {
+            sendResponse({ ok: false, error: ack?.error ?? "Mic toggle failed" });
+          }
+        } catch (e) {
+          sendResponse({
+            ok: false,
+            error: e instanceof Error ? e.message : "Mic toggle failed",
+          });
+        }
+        return;
+      }
+
       case "USER_STOPPED_SHARE":
         await stopShare();
         sendResponse({ ok: true });
@@ -94,12 +149,11 @@ async function startShare(): Promise<
   }
 
   session = {
+    ...initialSession(),
     active: true,
     roomId,
     shareLink,
-    viewerCount: 0,
     startedAt: Date.now(),
-    viewerStats: [],
   };
   await persistSession();
 
@@ -114,8 +168,25 @@ async function stopShare() {
   } catch {}
   await closeOffscreen();
 
-  session = { active: false, viewerCount: 0, viewerStats: [] };
+  session = initialSession();
   await persistSession();
+}
+
+async function fireInattentionNotification(viewerId: string) {
+  if (typeof viewerId !== "string" || viewerId.length === 0) return;
+  const id = `inattention-${viewerId}`;
+  const shortId = viewerId.slice(0, 6);
+  try {
+    await chrome.notifications.create(id, {
+      type: "basic",
+      iconUrl: "src/assets/icon-128.png",
+      title: "Viewer not watching",
+      message: `${shortId} has tabbed away from your share`,
+      priority: 1,
+    });
+  } catch (err) {
+    console.warn("[OneClickCast] notification failed", err);
+  }
 }
 
 function chooseDesktopMedia(): Promise<string | null> {
@@ -172,7 +243,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(async () => {
   const stored = await chrome.storage.local.get("session");
   if (stored.session?.active) {
-    session = { active: false, viewerCount: 0, viewerStats: [] };
+    session = initialSession();
     await persistSession();
   }
 });
