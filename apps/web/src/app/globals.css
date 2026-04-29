@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 255 255 255;
+    --foreground: 15 23 42;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg
+           bg-gradient-to-r from-brand-600 to-accent-500
+           hover:from-brand-700 hover:to-accent-600
+           text-white font-semibold text-sm transition shadow-sm;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg
+           bg-white border border-slate-200 hover:bg-slate-50
+           text-surface-dark font-medium text-sm transition;
+  }
+}

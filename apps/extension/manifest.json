@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "OneClickCast — Instant Screen Sharing",
+  "short_name": "OneClickCast",
+  "version": "0.1.0",
+  "description": "Share your screen with anyone in one click. No install needed for viewers, even on mobile.",
+  "author": "OneClickCast",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "src/assets/icon-16.png",
+    "32": "src/assets/icon-32.png",
+    "48": "src/assets/icon-48.png",
+    "128": "src/assets/icon-128.png"
+  },
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_title": "OneClickCast",
+    "default_icon": {
+      "16": "src/assets/icon-16.png",
+      "32": "src/assets/icon-32.png",
+      "48": "src/assets/icon-48.png",
+      "128": "src/assets/icon-128.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "desktopCapture",
+    "tabCapture",
+    "offscreen",
+    "notifications",
+    "debugger"
+  ],
+  "host_permissions": [
+    "https://*.oneclickcast.pages.dev/*",
+    "https://*.oneclickcast-signaling.workers.dev/*",
+    "wss://*.oneclickcast-signaling.workers.dev/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["src/assets/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
