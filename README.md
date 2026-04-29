@@ -114,12 +114,38 @@ pnpm deploy
 
 Self-hosting alternative: run `coturn` on an Oracle Cloud Free Tier VM (forever-free), then point `TURN_HOST` at it.
 
+### Supabase setup (for auth + dashboard)
+
+The web app uses Supabase for user accounts and (eventually) recording metadata storage. Free tier covers ~50K MAU.
+
+1. Create a free project at [supabase.com](https://supabase.com)
+2. **Run the schema migration**: Open the SQL editor in your Supabase dashboard and paste the contents of `supabase/migrations/0001_init.sql`. Click "Run". This creates:
+   - `public.profiles` — user profiles synced from `auth.users`
+   - `public.share_sessions` — share history
+   - `public.recordings` — recording metadata (used in Phase 6b)
+   - Row-level security policies so users only see their own data
+   - A trigger that auto-creates a profile row on signup
+3. **Configure auth providers**:
+   - Email magic link is enabled by default — no extra config needed
+   - For Google OAuth: Authentication → Providers → Google → enable, paste your Google OAuth client ID + secret. Add `https://oneclickcast.pages.dev/auth/callback` (and your local `http://localhost:3000/auth/callback`) as redirect URLs in both Supabase and Google Cloud Console
+4. **Get your keys**: Settings → API → copy the project URL and `anon` public key
+5. **Set web env vars**:
+   ```bash
+   cd apps/web
+   cp .env.local.example .env.local
+   # Paste your URL and anon key into .env.local
+   ```
+6. **Set Cloudflare Pages env vars** for production: in the Pages project settings, add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+Sign-in pages: `/login` (magic link + Google), dashboard: `/dashboard`. The dashboard is empty until Phase 7b wires the signaling worker to write session metadata back to Supabase.
+
 ### Deploying the web app
 
 ```bash
 cd apps/web
 pnpm build
 # Connect repo to Cloudflare Pages, set build command to `pnpm --filter @oneclickcast/web build`
+# Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY env vars in Pages settings
 ```
 
 ## Branding
@@ -140,12 +166,13 @@ pnpm build
 - [x] Phase 4: Tab remote control (tab capture + chrome.debugger Input dispatch, viewer overlay)
 - [x] Phase 5: Projector mode (8 Mbps bitrate boost, motion content hint, H.264 codec preference)
 - [x] Phase 6a: Local recording (MediaRecorder → WebM, auto-download on stop, live duration in popup)
+- [x] Phase 7a: Web auth + dashboard (Supabase magic link + Google OAuth, protected /dashboard, empty share-history table)
 - [ ] Phase 3: Engagement tracking + audio
 - [ ] Phase 4: Tab remote control
 - [ ] Phase 5: Projector mode
 - [ ] Phase 6: Recording + cloud storage
-- [ ] Phase 7: Auth + dashboard
-- [ ] Phase 6b: Cloud recordings (Supabase + R2 + ffmpeg transcoding) — depends on Phase 7
+- [ ] Phase 7b: Extension sign-in + signaling worker writes session metadata to Supabase
+- [ ] Phase 6b: Cloud recordings (Supabase + R2 + ffmpeg transcoding) — depends on Phase 7b
 - [ ] Phase 8: Polish + Chrome Web Store launch
 
 ## License

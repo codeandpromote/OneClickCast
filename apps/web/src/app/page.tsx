@@ -10,7 +10,12 @@ export default function HomePage() {
           </div>
           <span className="font-bold text-lg">OneClickCast</span>
         </div>
-        <a href="#" className="btn-primary">Add to Chrome</a>
+        <div className="flex items-center gap-3">
+          <a href="/login" className="text-sm text-surface-muted hover:text-surface-dark transition">
+            Sign in
+          </a>
+          <a href="#" className="btn-primary">Add to Chrome</a>
+        </div>
       </nav>
 
       <section className="flex-1 flex flex-col items-center justify-center px-6 py-20 text-center">
