@@ -27,6 +27,15 @@ type SessionState = {
   engagement: ViewerEngagement[];
   micEnabled: boolean;
   projectorMode: boolean;
+  recording: boolean;
+  recordingStartedAt?: number;
+  recordingElapsedMs: number;
+  lastRecording?: {
+    filename: string;
+    sizeBytes: number;
+    durationMs: number;
+    finishedAt: number;
+  };
   controlSupported: boolean;
   controlEnabled: boolean;
   sharedTabId?: number;
@@ -40,6 +49,8 @@ const initialSession = (): SessionState => ({
   engagement: [],
   micEnabled: false,
   projectorMode: false,
+  recording: false,
+  recordingElapsedMs: 0,
   controlSupported: false,
   controlEnabled: false,
 });
@@ -136,6 +147,67 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         return;
       }
+
+      case "TOGGLE_RECORDING": {
+        try {
+          const ack = (await chrome.runtime.sendMessage({
+            target: "offscreen",
+            type: "TOGGLE_RECORDING",
+          })) as
+            | {
+                ok: boolean;
+                recording?: boolean;
+                startedAt?: number;
+                error?: string;
+              }
+            | undefined;
+          if (ack?.ok) {
+            session.recording = ack.recording === true;
+            session.recordingStartedAt = ack.startedAt;
+            if (!ack.recording) session.recordingElapsedMs = 0;
+            await persistSession();
+            sendResponse({ ok: true, recording: session.recording });
+          } else {
+            sendResponse({
+              ok: false,
+              error: ack?.error ?? "Recording toggle failed",
+            });
+          }
+        } catch (e) {
+          sendResponse({
+            ok: false,
+            error: e instanceof Error ? e.message : "Recording toggle failed",
+          });
+        }
+        return;
+      }
+
+      case "RECORDING_TICK":
+        if (session.recording) {
+          session.recordingElapsedMs = msg.elapsedMs ?? 0;
+        }
+        sendResponse({ ok: true });
+        return;
+
+      case "RECORDING_STATE_UPDATE":
+        session.recording = msg.recording === true;
+        if (!msg.recording) {
+          session.recordingStartedAt = undefined;
+          session.recordingElapsedMs = 0;
+          if (msg.finalized) {
+            session.lastRecording = {
+              filename: msg.finalized.filename,
+              sizeBytes: msg.finalized.sizeBytes,
+              durationMs: msg.finalized.durationMs,
+              finishedAt: Date.now(),
+            };
+          }
+        } else if (msg.startedAt) {
+          session.recordingStartedAt = msg.startedAt;
+        }
+        await persistSession();
+        sendResponse({ ok: true });
+        return;
 
       case "TOGGLE_PROJECTOR_MODE": {
         try {

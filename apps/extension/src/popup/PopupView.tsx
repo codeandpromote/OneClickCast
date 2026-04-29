@@ -12,6 +12,14 @@ interface SessionInfo {
   engagement: ViewerEngagement[];
   micEnabled: boolean;
   projectorMode: boolean;
+  recording: boolean;
+  recordingElapsedMs: number;
+  lastRecording?: {
+    filename: string;
+    sizeBytes: number;
+    durationMs: number;
+    finishedAt: number;
+  };
   controlSupported: boolean;
   controlEnabled: boolean;
   sharedTabTitle?: string;
@@ -30,6 +38,12 @@ export function Popup() {
   const [micPending, setMicPending] = useState(false);
   const [projectorMode, setProjectorMode] = useState(false);
   const [projectorPending, setProjectorPending] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
+  const [recordingPending, setRecordingPending] = useState(false);
+  const [lastRecording, setLastRecording] = useState<
+    SessionInfo["lastRecording"] | undefined
+  >();
   const [controlSupported, setControlSupported] = useState(false);
   const [controlEnabled, setControlEnabled] = useState(false);
   const [controlPending, setControlPending] = useState(false);
@@ -52,6 +66,9 @@ export function Popup() {
         setEngagement(res.engagement ?? []);
         setMicEnabled(res.micEnabled === true);
         setProjectorMode(res.projectorMode === true);
+        setRecording(res.recording === true);
+        setRecordingElapsedMs(res.recordingElapsedMs ?? 0);
+        setLastRecording(res.lastRecording);
         setControlSupported(res.controlSupported === true);
         setControlEnabled(res.controlEnabled === true);
         setTabTitle(res.sharedTabTitle);
@@ -63,6 +80,9 @@ export function Popup() {
         setEngagement([]);
         setMicEnabled(false);
         setProjectorMode(false);
+        setRecording(false);
+        setRecordingElapsedMs(0);
+        setLastRecording(res?.lastRecording);
         setControlSupported(false);
         setControlEnabled(false);
         setTabTitle(undefined);
@@ -151,6 +171,8 @@ export function Popup() {
     setEngagement([]);
     setMicEnabled(false);
     setProjectorMode(false);
+    setRecording(false);
+    setRecordingElapsedMs(0);
     setControlEnabled(false);
     setControlSupported(false);
     setTabTitle(undefined);
@@ -174,6 +196,20 @@ export function Popup() {
       else if (res?.error) setError(res.error);
     } finally {
       setMicPending(false);
+    }
+  };
+
+  const toggleRecording = async () => {
+    if (recordingPending) return;
+    setRecordingPending(true);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        type: "TOGGLE_RECORDING",
+      })) as { ok: boolean; recording?: boolean; error?: string };
+      if (res?.ok) setRecording(res.recording === true);
+      else if (res?.error) setError(res.error);
+    } finally {
+      setRecordingPending(false);
     }
   };
 
@@ -280,37 +316,66 @@ export function Popup() {
             </p>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-1.5">
             <button
               onClick={toggleMic}
               disabled={micPending}
-              className={`text-sm font-medium py-2 rounded-lg transition flex items-center justify-center gap-2 border ${
+              title="Add your microphone audio to the share"
+              className={`text-xs font-medium py-2 rounded-lg transition flex items-center justify-center gap-1 border ${
                 micEnabled
                   ? "bg-brand-600 hover:bg-brand-700 border-brand-600 text-white"
                   : "bg-white hover:bg-slate-50 border-slate-300 text-surface-dark"
               } ${micPending ? "opacity-60 cursor-wait" : ""}`}
             >
               <MicIcon active={micEnabled} />
-              {micPending ? "…" : micEnabled ? "Mic on" : "Mic"}
+              {micPending ? "…" : "Mic"}
             </button>
             <button
               onClick={toggleProjector}
               disabled={projectorPending}
-              title="Boosts bitrate to 8 Mbps and prefers H.264 — best for sharing video clips"
-              className={`text-sm font-medium py-2 rounded-lg transition flex items-center justify-center gap-2 border ${
+              title="Boosts bitrate to 8 Mbps and prefers H.264 — best for video clips"
+              className={`text-xs font-medium py-2 rounded-lg transition flex items-center justify-center gap-1 border ${
                 projectorMode
                   ? "bg-accent-500 hover:bg-accent-600 border-accent-500 text-white"
                   : "bg-white hover:bg-slate-50 border-slate-300 text-surface-dark"
               } ${projectorPending ? "opacity-60 cursor-wait" : ""}`}
             >
               <ProjectorIcon active={projectorMode} />
-              {projectorPending
+              {projectorPending ? "…" : "Projector"}
+            </button>
+            <button
+              onClick={toggleRecording}
+              disabled={recordingPending}
+              title="Record this session to a WebM file on your computer"
+              className={`text-xs font-medium py-2 rounded-lg transition flex items-center justify-center gap-1 border ${
+                recording
+                  ? "bg-red-600 hover:bg-red-700 border-red-600 text-white"
+                  : "bg-white hover:bg-slate-50 border-slate-300 text-surface-dark"
+              } ${recordingPending ? "opacity-60 cursor-wait" : ""}`}
+            >
+              <RecordIcon active={recording} />
+              {recordingPending
                 ? "…"
-                : projectorMode
-                  ? "Projector on"
-                  : "Projector"}
+                : recording
+                  ? formatElapsed(recordingElapsedMs)
+                  : "Record"}
             </button>
           </div>
+
+          {recording && (
+            <div className="flex items-center gap-2 text-[10px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" />
+              Recording locally · will download as WebM when you stop
+            </div>
+          )}
+
+          {!recording && lastRecording && (
+            <div className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5 leading-snug">
+              Saved {lastRecording.filename} ·{" "}
+              {formatBytes(lastRecording.sizeBytes)} ·{" "}
+              {formatElapsed(lastRecording.durationMs)}
+            </div>
+          )}
 
           {controlSupported && (
             <>
@@ -378,7 +443,7 @@ export function Popup() {
       )}
 
       <footer className="mt-auto text-[10px] text-surface-muted text-center pt-2">
-        v0.5.0 · No install needed for viewers
+        v0.6.0 · No install needed for viewers
       </footer>
     </div>
   );
@@ -503,6 +568,35 @@ function ProjectorIcon({ active }: { active: boolean }) {
       <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
     </svg>
   );
+}
+
+function RecordIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24">
+      <circle
+        cx="12"
+        cy="12"
+        r="8"
+        fill={active ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="2"
+      />
+    </svg>
+  );
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function Logo() {

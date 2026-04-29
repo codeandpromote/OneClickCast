@@ -139,11 +139,13 @@ pnpm build
 - [x] Phase 3: Engagement + audio (mic toggle, viewer attention tracking, inattention notifications)
 - [x] Phase 4: Tab remote control (tab capture + chrome.debugger Input dispatch, viewer overlay)
 - [x] Phase 5: Projector mode (8 Mbps bitrate boost, motion content hint, H.264 codec preference)
+- [x] Phase 6a: Local recording (MediaRecorder → WebM, auto-download on stop, live duration in popup)
 - [ ] Phase 3: Engagement tracking + audio
 - [ ] Phase 4: Tab remote control
 - [ ] Phase 5: Projector mode
 - [ ] Phase 6: Recording + cloud storage
 - [ ] Phase 7: Auth + dashboard
+- [ ] Phase 6b: Cloud recordings (Supabase + R2 + ffmpeg transcoding) — depends on Phase 7
 - [ ] Phase 8: Polish + Chrome Web Store launch
 
 ## License

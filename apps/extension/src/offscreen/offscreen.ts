@@ -47,11 +47,17 @@ interface OffscreenToggleProjectorMessage {
   type: "TOGGLE_PROJECTOR_MODE";
 }
 
+interface OffscreenToggleRecordingMessage {
+  target: "offscreen";
+  type: "TOGGLE_RECORDING";
+}
+
 type OffscreenMessage =
   | OffscreenStartMessage
   | OffscreenStopMessage
   | OffscreenToggleMicMessage
-  | OffscreenToggleProjectorMessage;
+  | OffscreenToggleProjectorMessage
+  | OffscreenToggleRecordingMessage;
 
 interface PeerEntry {
   pc: RTCPeerConnection;
@@ -64,6 +70,10 @@ interface PeerEntry {
 let stream: MediaStream | null = null;
 let micStream: MediaStream | null = null;
 let projectorMode = false;
+let mediaRecorder: MediaRecorder | null = null;
+let recordingChunks: Blob[] = [];
+let recordingStartedAt = 0;
+let recordingTickTimer: ReturnType<typeof setInterval> | null = null;
 let ws: WebSocket | null = null;
 let session: {
   roomId: string;
@@ -89,7 +99,7 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
         await startCapture(msg.streamId, msg.roomId, msg.signalingUrl);
         sendResponse({ ok: true });
       } else if (msg.type === "STOP_CAPTURE") {
-        stopCapture();
+        await stopCapture();
         sendResponse({ ok: true });
       } else if (msg.type === "TOGGLE_MIC") {
         const enabled = await toggleMic();
@@ -97,6 +107,9 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
       } else if (msg.type === "TOGGLE_PROJECTOR_MODE") {
         const enabled = await toggleProjectorMode();
         sendResponse({ ok: true, projectorMode: enabled });
+      } else if (msg.type === "TOGGLE_RECORDING") {
+        const result = await toggleRecording();
+        sendResponse({ ok: true, ...result });
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : "Unknown error";
@@ -505,6 +518,172 @@ function notifyViewerCount(count: number) {
     .catch(() => {});
 }
 
+async function toggleRecording(): Promise<{
+  recording: boolean;
+  startedAt?: number;
+}> {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    await stopRecording();
+    return { recording: false };
+  }
+  const ok = startRecording();
+  return { recording: ok, startedAt: ok ? recordingStartedAt : undefined };
+}
+
+function pickRecordingMimeType(): string {
+  const candidates = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+  ];
+  for (const m of candidates) {
+    if (MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return "video/webm";
+}
+
+function startRecording(): boolean {
+  if (!stream) return false;
+  if (mediaRecorder && mediaRecorder.state !== "inactive") return true;
+
+  const tracks: MediaStreamTrack[] = [];
+  for (const t of stream.getVideoTracks()) tracks.push(t);
+  for (const t of stream.getAudioTracks()) tracks.push(t);
+  if (micStream) for (const t of micStream.getAudioTracks()) tracks.push(t);
+  const combined = new MediaStream(tracks);
+
+  recordingChunks = [];
+  recordingStartedAt = Date.now();
+
+  const mimeType = pickRecordingMimeType();
+  try {
+    mediaRecorder = new MediaRecorder(combined, {
+      mimeType,
+      videoBitsPerSecond: 4_000_000,
+      audioBitsPerSecond: 128_000,
+    });
+  } catch (err) {
+    console.error("[offscreen] MediaRecorder construction failed", err);
+    mediaRecorder = null;
+    return false;
+  }
+
+  mediaRecorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) {
+      recordingChunks.push(event.data);
+    }
+  };
+
+  mediaRecorder.onstop = () => {
+    finalizeRecording(mimeType);
+  };
+
+  mediaRecorder.onerror = (event) => {
+    console.error("[offscreen] MediaRecorder error", event);
+  };
+
+  mediaRecorder.start(1000);
+  startRecordingTicker();
+  notifyRecordingState(true);
+  return true;
+}
+
+function stopRecording(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!mediaRecorder || mediaRecorder.state === "inactive") {
+      resolve();
+      return;
+    }
+    const recorder = mediaRecorder;
+    const originalOnStop = recorder.onstop;
+    recorder.onstop = (event) => {
+      try {
+        if (typeof originalOnStop === "function") {
+          originalOnStop.call(recorder, event);
+        }
+      } finally {
+        resolve();
+      }
+    };
+    recorder.stop();
+    stopRecordingTicker();
+  });
+}
+
+function finalizeRecording(mimeType: string) {
+  if (recordingChunks.length === 0) {
+    mediaRecorder = null;
+    notifyRecordingState(false);
+    return;
+  }
+
+  const blob = new Blob(recordingChunks, { type: mimeType });
+  const sizeBytes = blob.size;
+  const durationMs = Date.now() - recordingStartedAt;
+  const url = URL.createObjectURL(blob);
+  const filename = `oneclickcast-${formatStamp(new Date())}.webm`;
+
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+
+  recordingChunks = [];
+  mediaRecorder = null;
+  notifyRecordingState(false, { filename, sizeBytes, durationMs });
+}
+
+function startRecordingTicker() {
+  stopRecordingTicker();
+  recordingTickTimer = setInterval(() => {
+    chrome.runtime
+      .sendMessage({
+        type: "RECORDING_TICK",
+        elapsedMs: Date.now() - recordingStartedAt,
+      })
+      .catch(() => {});
+  }, 1000);
+}
+
+function stopRecordingTicker() {
+  if (recordingTickTimer) {
+    clearInterval(recordingTickTimer);
+    recordingTickTimer = null;
+  }
+}
+
+function notifyRecordingState(
+  recording: boolean,
+  finalized?: {
+    filename: string;
+    sizeBytes: number;
+    durationMs: number;
+  },
+) {
+  chrome.runtime
+    .sendMessage({
+      type: "RECORDING_STATE_UPDATE",
+      recording,
+      startedAt: recording ? recordingStartedAt : undefined,
+      finalized,
+    })
+    .catch(() => {});
+}
+
+function formatStamp(d: Date): string {
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(
+    d.getHours(),
+  )}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
 async function toggleProjectorMode(): Promise<boolean> {
   if (!stream) return projectorMode;
   projectorMode = !projectorMode;
@@ -615,8 +794,12 @@ async function disableMic() {
   micStream = null;
 }
 
-function stopCapture() {
+async function stopCapture() {
   active = false;
+
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    await stopRecording();
+  }
 
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -650,6 +833,8 @@ function stopCapture() {
   }
 
   projectorMode = false;
+  recordingChunks = [];
+  recordingStartedAt = 0;
   session = null;
   reconnectAttempts = 0;
 }
