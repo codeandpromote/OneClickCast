@@ -13,3 +13,12 @@ new_classes = ["Room"]
 
 [observability]
 enabled = true
+
+# TURN server config (optional). For production, sign up at https://www.metered.ca/
+# (free tier: 50GB/mo) and set these via:
+#   pnpm exec wrangler secret put TURN_HOST
+#   pnpm exec wrangler secret put TURN_USERNAME
+#   pnpm exec wrangler secret put TURN_CREDENTIAL
+# When unset, the worker falls back to STUN-only (works on most home networks).
+# [vars]
+# TURN_HOST = "your-host.metered.ca"

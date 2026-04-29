@@ -1,11 +1,15 @@
 "use client";
 
 import { use, useEffect, useRef, useState } from "react";
-import { DEFAULT_ROOM_CONFIG } from "@oneclickcast/shared";
+import { DEFAULT_ROOM_CONFIG, type IceServer } from "@oneclickcast/shared";
 
 const SIGNALING_URL =
   process.env.NEXT_PUBLIC_SIGNALING_URL ??
   "wss://oneclickcast-signaling.workers.dev";
+
+const RECONNECT_INITIAL_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+const VIEWER_PING_INTERVAL_MS = 25_000;
 
 type ConnState = "connecting" | "waiting" | "live" | "ended" | "error";
 
@@ -18,19 +22,26 @@ export default function ViewerRoom({
   const videoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const iceServersRef = useRef<IceServer[]>(DEFAULT_ROOM_CONFIG.iceServers);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cancelledRef = useRef(false);
   const [state, setState] = useState<ConnState>("connecting");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    cancelledRef.current = false;
 
-    async function connect() {
-      const ws = new WebSocket(`${SIGNALING_URL}/room/${roomId}?role=viewer`);
-      wsRef.current = ws;
+    fetchIceServers().then((servers) => {
+      iceServersRef.current = servers;
+      if (!cancelledRef.current) connect();
+    });
 
-      const pc = new RTCPeerConnection({
-        iceServers: DEFAULT_ROOM_CONFIG.iceServers,
-      });
+    function connect() {
+      if (cancelledRef.current) return;
+
+      const pc = new RTCPeerConnection({ iceServers: iceServersRef.current });
       pcRef.current = pc;
 
       pc.ontrack = (event) => {
@@ -39,6 +50,15 @@ export default function ViewerRoom({
           setState("live");
         }
       };
+
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === "failed") {
+          console.warn("[viewer] ICE failed; awaiting presenter restart");
+        }
+      };
+
+      const ws = new WebSocket(`${SIGNALING_URL}/room/${roomId}?role=viewer`);
+      wsRef.current = ws;
 
       pc.onicecandidate = (event) => {
         if (event.candidate && ws.readyState === WebSocket.OPEN) {
@@ -52,15 +72,27 @@ export default function ViewerRoom({
       };
 
       ws.onopen = () => {
-        if (!cancelled) setState("waiting");
+        if (cancelledRef.current) return;
+        reconnectAttemptsRef.current = 0;
+        if (state !== "live") setState("waiting");
+        startPingLoop(ws);
         startEngagementHeartbeat(ws);
       };
 
       ws.onmessage = async (event) => {
-        const msg = JSON.parse(event.data);
+        let msg: { type: string; [k: string]: unknown };
+        try {
+          msg = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
         switch (msg.type) {
           case "offer": {
-            await pc.setRemoteDescription({ type: "offer", sdp: msg.sdp });
+            await pc.setRemoteDescription({
+              type: "offer",
+              sdp: msg.sdp as string,
+            });
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             ws.send(
@@ -74,40 +106,92 @@ export default function ViewerRoom({
           }
           case "ice-candidate":
             if (msg.candidate) {
-              await pc.addIceCandidate(msg.candidate);
+              try {
+                await pc.addIceCandidate(msg.candidate as RTCIceCandidateInit);
+              } catch (err) {
+                console.warn("[viewer] ICE candidate failed", err);
+              }
             }
             break;
+          case "ping":
+            ws.send(JSON.stringify({ type: "pong" }));
+            break;
           case "presenter-left":
+            cancelledRef.current = true;
             setState("ended");
+            cleanup();
             break;
           case "error":
-            setErrorMsg(msg.error);
+            setErrorMsg((msg.error as string) ?? "Signaling error");
             setState("error");
             break;
         }
       };
 
       ws.onerror = () => {
-        if (!cancelled) {
-          setErrorMsg("Connection error");
-          setState("error");
-        }
+        console.warn("[viewer] WebSocket error");
       };
 
       ws.onclose = () => {
-        if (!cancelled && state !== "ended") {
-          setState("ended");
-        }
+        stopPingLoop();
+        try {
+          pc.close();
+        } catch {}
+        if (cancelledRef.current) return;
+        scheduleReconnect();
       };
     }
 
-    connect();
+    function scheduleReconnect() {
+      if (cancelledRef.current || reconnectTimerRef.current) return;
+      const attempt = reconnectAttemptsRef.current;
+      const delay = Math.min(
+        RECONNECT_INITIAL_DELAY_MS * 2 ** attempt,
+        RECONNECT_MAX_DELAY_MS,
+      );
+      reconnectAttemptsRef.current = attempt + 1;
+      console.log(`[viewer] Reconnecting in ${delay}ms`);
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        connect();
+      }, delay);
+    }
+
+    function startPingLoop(ws: WebSocket) {
+      stopPingLoop();
+      pingTimerRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }));
+        }
+      }, VIEWER_PING_INTERVAL_MS);
+    }
+
+    function stopPingLoop() {
+      if (pingTimerRef.current) {
+        clearInterval(pingTimerRef.current);
+        pingTimerRef.current = null;
+      }
+    }
+
+    function cleanup() {
+      stopPingLoop();
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      try {
+        pcRef.current?.close();
+      } catch {}
+      try {
+        wsRef.current?.close();
+      } catch {}
+    }
 
     return () => {
-      cancelled = true;
-      pcRef.current?.close();
-      wsRef.current?.close();
+      cancelledRef.current = true;
+      cleanup();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
   return (
@@ -131,7 +215,6 @@ export default function ViewerRoom({
             autoPlay
             playsInline
             controls={false}
-            muted={false}
             className="max-w-full max-h-full rounded-lg shadow-2xl bg-black"
           />
         ) : (
@@ -161,6 +244,22 @@ export default function ViewerRoom({
       </main>
     </div>
   );
+}
+
+async function fetchIceServers(): Promise<IceServer[]> {
+  try {
+    const httpUrl =
+      SIGNALING_URL.replace(/^ws/, "http").replace(/\/+$/, "") + "/ice-servers";
+    const res = await fetch(httpUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as { iceServers?: IceServer[] };
+    if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+      return data.iceServers;
+    }
+  } catch (err) {
+    console.warn("[viewer] ICE servers fetch failed, using fallback", err);
+  }
+  return DEFAULT_ROOM_CONFIG.iceServers;
 }
 
 function StatusBadge({ state }: { state: ConnState }) {

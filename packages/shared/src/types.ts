@@ -57,6 +57,27 @@ export interface PongMessage {
   type: "pong";
 }
 
+export type ConnectionQuality = "good" | "fair" | "poor" | "failed";
+
+export type PeerConnectionStateLike =
+  | "new"
+  | "connecting"
+  | "connected"
+  | "disconnected"
+  | "failed"
+  | "closed"
+  | "unknown";
+
+export interface ViewerStats {
+  viewerId: string;
+  state: PeerConnectionStateLike;
+  quality: ConnectionQuality;
+  bitrateKbps: number;
+  packetLossPct: number;
+  rttMs: number;
+  updatedAt: number;
+}
+
 export interface JoinedMessage {
   type: "joined";
   clientId: string;

@@ -1,4 +1,4 @@
-import { generateRoomId } from "@oneclickcast/shared";
+import { generateRoomId, type ViewerStats } from "@oneclickcast/shared";
 
 const VIEWER_BASE_URL =
   import.meta.env.VITE_VIEWER_BASE_URL ?? "https://oneclickcast.pages.dev/room";
@@ -14,9 +14,10 @@ type SessionState = {
   shareLink?: string;
   viewerCount: number;
   startedAt?: number;
+  viewerStats: ViewerStats[];
 };
 
-let session: SessionState = { active: false, viewerCount: 0 };
+let session: SessionState = { active: false, viewerCount: 0, viewerStats: [] };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.target === "offscreen") return;
@@ -46,7 +47,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "VIEWER_COUNT_UPDATE":
         session.viewerCount = msg.count ?? 0;
+        if (session.viewerCount === 0) session.viewerStats = [];
         await persistSession();
+        sendResponse({ ok: true });
+        return;
+
+      case "VIEWER_STATS_UPDATE":
+        session.viewerStats = (msg.stats ?? []) as ViewerStats[];
         sendResponse({ ok: true });
         return;
 
@@ -92,6 +99,7 @@ async function startShare(): Promise<
     shareLink,
     viewerCount: 0,
     startedAt: Date.now(),
+    viewerStats: [],
   };
   await persistSession();
 
@@ -106,7 +114,7 @@ async function stopShare() {
   } catch {}
   await closeOffscreen();
 
-  session = { active: false, viewerCount: 0 };
+  session = { active: false, viewerCount: 0, viewerStats: [] };
   await persistSession();
 }
 
@@ -164,7 +172,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(async () => {
   const stored = await chrome.storage.local.get("session");
   if (stored.session?.active) {
-    session = { active: false, viewerCount: 0 };
+    session = { active: false, viewerCount: 0, viewerStats: [] };
     await persistSession();
   }
 });

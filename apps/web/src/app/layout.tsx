@@ -1,10 +1,13 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "OneClickCast — Instant Screen Sharing",
   description:
     "Share your screen with anyone in one click. No install needed for viewers, even on mobile.",
+};
+
+export const viewport: Viewport = {
   themeColor: "#4F46E5",
 };
 

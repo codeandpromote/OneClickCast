@@ -1,9 +1,20 @@
-import type { SignalingMessage } from "@oneclickcast/shared";
+import type {
+  IceServer,
+  SignalingMessage,
+  ViewerStats,
+  PeerConnectionStateLike,
+  ConnectionQuality,
+} from "@oneclickcast/shared";
 
-const ICE_SERVERS: RTCIceServer[] = [
+const FALLBACK_ICE_SERVERS: IceServer[] = [
   { urls: "stun:stun.cloudflare.com:3478" },
   { urls: "stun:stun.l.google.com:19302" },
 ];
+
+const RECONNECT_INITIAL_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+const STATS_INTERVAL_MS = 3_000;
+const PRESENTER_PING_INTERVAL_MS = 25_000;
 
 interface OffscreenStartMessage {
   target: "offscreen";
@@ -20,10 +31,27 @@ interface OffscreenStopMessage {
 
 type OffscreenMessage = OffscreenStartMessage | OffscreenStopMessage;
 
+interface PeerEntry {
+  pc: RTCPeerConnection;
+  lastBytesSent: number;
+  lastReportAt: number;
+  packetsLost: number;
+  packetsSent: number;
+}
+
 let stream: MediaStream | null = null;
 let ws: WebSocket | null = null;
-let myClientId: string | null = null;
-const peers = new Map<string, RTCPeerConnection>();
+let session: {
+  roomId: string;
+  signalingUrl: string;
+  iceServers: IceServer[];
+} | null = null;
+let active = false;
+let reconnectAttempts = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let statsTimer: ReturnType<typeof setInterval> | null = null;
+let pingTimer: ReturnType<typeof setInterval> | null = null;
+const peers = new Map<string, PeerEntry>();
 
 chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
   const msg = raw as OffscreenMessage;
@@ -52,9 +80,7 @@ async function startCapture(
   roomId: string,
   signalingUrl: string,
 ) {
-  if (stream || ws) {
-    stopCapture();
-  }
+  if (active) stopCapture();
 
   stream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -78,15 +104,47 @@ async function startCapture(
   if (videoTrack) {
     videoTrack.addEventListener("ended", () => {
       console.log("[offscreen] User ended share via browser UI");
-      chrome.runtime.sendMessage({ type: "USER_STOPPED_SHARE" }).catch(() => {});
+      chrome.runtime
+        .sendMessage({ type: "USER_STOPPED_SHARE" })
+        .catch(() => {});
       stopCapture();
     });
   }
 
-  ws = new WebSocket(`${signalingUrl}/room/${roomId}?role=presenter`);
+  const iceServers = await fetchIceServers(signalingUrl);
+  session = { roomId, signalingUrl, iceServers };
+  active = true;
+
+  connectSignaling();
+  startStatsLoop();
+}
+
+async function fetchIceServers(signalingUrl: string): Promise<IceServer[]> {
+  try {
+    const httpUrl =
+      signalingUrl.replace(/^ws/, "http").replace(/\/+$/, "") + "/ice-servers";
+    const res = await fetch(httpUrl);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as { iceServers?: IceServer[] };
+    if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+      return data.iceServers;
+    }
+  } catch (err) {
+    console.warn("[offscreen] ICE servers fetch failed, using fallback", err);
+  }
+  return FALLBACK_ICE_SERVERS;
+}
+
+function connectSignaling() {
+  if (!session || !active) return;
+
+  const url = `${session.signalingUrl}/room/${session.roomId}?role=presenter`;
+  ws = new WebSocket(url);
 
   ws.addEventListener("open", () => {
     console.log("[offscreen] Signaling connected");
+    reconnectAttempts = 0;
+    startPingLoop();
   });
 
   ws.addEventListener("message", async (event) => {
@@ -96,116 +154,255 @@ async function startCapture(
     } catch {
       return;
     }
-
-    switch (msg.type) {
-      case "joined":
-        myClientId = msg.clientId;
-        break;
-
-      case "viewer-joined":
-        await handleViewerJoined(msg.viewerId);
-        notifyViewerCount(msg.viewerCount);
-        break;
-
-      case "viewer-left":
-        handleViewerLeft(msg.viewerId);
-        notifyViewerCount(msg.viewerCount);
-        break;
-
-      case "answer":
-        if (msg.fromId) await handleAnswer(msg.fromId, msg.sdp);
-        break;
-
-      case "ice-candidate":
-        if (msg.fromId) await handleViewerIce(msg.fromId, msg.candidate);
-        break;
-
-      case "error":
-        console.error("[offscreen] Signaling error:", msg.error);
-        break;
-    }
+    await handleSignalMessage(msg);
   });
 
   ws.addEventListener("close", () => {
-    console.log("[offscreen] Signaling closed");
+    stopPingLoop();
+    if (active) scheduleReconnect();
   });
 
   ws.addEventListener("error", (e) => {
-    console.error("[offscreen] Signaling error", e);
+    console.warn("[offscreen] Signaling error", e);
   });
 }
 
-async function handleViewerJoined(viewerId: string) {
-  if (!stream) return;
+function scheduleReconnect() {
+  if (!active || reconnectTimer) return;
+  const delay = Math.min(
+    RECONNECT_INITIAL_DELAY_MS * 2 ** reconnectAttempts,
+    RECONNECT_MAX_DELAY_MS,
+  );
+  reconnectAttempts += 1;
+  console.log(`[offscreen] Reconnecting in ${delay}ms`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectSignaling();
+  }, delay);
+}
 
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  peers.set(viewerId, pc);
+async function handleSignalMessage(
+  msg: SignalingMessage & { fromId?: string },
+) {
+  switch (msg.type) {
+    case "viewer-joined":
+      await handleViewerJoined(msg.viewerId);
+      notifyViewerCount(msg.viewerCount);
+      break;
 
-  for (const track of stream.getTracks()) {
-    pc.addTrack(track, stream);
+    case "viewer-left":
+      handleViewerLeft(msg.viewerId);
+      notifyViewerCount(msg.viewerCount);
+      break;
+
+    case "answer":
+      if (msg.fromId) await handleAnswer(msg.fromId, msg.sdp);
+      break;
+
+    case "ice-candidate":
+      if (msg.fromId) await handleViewerIce(msg.fromId, msg.candidate);
+      break;
+
+    case "ping":
+      sendSignal({ type: "pong" });
+      break;
+
+    case "error":
+      console.error("[offscreen] Signaling error:", msg.error);
+      break;
   }
+}
+
+async function handleViewerJoined(viewerId: string) {
+  if (!stream || !session) return;
+
+  const pc = new RTCPeerConnection({ iceServers: session.iceServers });
+  peers.set(viewerId, {
+    pc,
+    lastBytesSent: 0,
+    lastReportAt: Date.now(),
+    packetsLost: 0,
+    packetsSent: 0,
+  });
+
+  for (const track of stream.getTracks()) pc.addTrack(track, stream);
 
   pc.onicecandidate = (event) => {
-    if (event.candidate && ws?.readyState === WebSocket.OPEN) {
-      ws.send(
-        JSON.stringify({
-          type: "ice-candidate",
-          candidate: event.candidate.toJSON(),
-          targetId: viewerId,
-        }),
-      );
+    if (event.candidate) {
+      sendSignal({
+        type: "ice-candidate",
+        candidate: event.candidate.toJSON(),
+        targetId: viewerId,
+      });
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    console.log(
+      `[offscreen] viewer ${viewerId} iceState: ${pc.iceConnectionState}`,
+    );
+    if (pc.iceConnectionState === "failed") {
+      void restartIceFor(viewerId);
     }
   };
 
   pc.onconnectionstatechange = () => {
     console.log(`[offscreen] viewer ${viewerId} state: ${pc.connectionState}`);
-    if (
-      pc.connectionState === "failed" ||
-      pc.connectionState === "closed" ||
-      pc.connectionState === "disconnected"
-    ) {
+    if (pc.connectionState === "closed") {
       peers.delete(viewerId);
-      pc.close();
     }
   };
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
+  await sendOffer(viewerId, false);
+}
 
-  ws?.send(
-    JSON.stringify({
-      type: "offer",
-      sdp: offer.sdp,
-      targetId: viewerId,
-    }),
-  );
+async function sendOffer(viewerId: string, iceRestart: boolean) {
+  const entry = peers.get(viewerId);
+  if (!entry) return;
+  const offer = await entry.pc.createOffer({ iceRestart });
+  await entry.pc.setLocalDescription(offer);
+  sendSignal({
+    type: "offer",
+    sdp: offer.sdp ?? "",
+    targetId: viewerId,
+  });
+}
+
+async function restartIceFor(viewerId: string) {
+  const entry = peers.get(viewerId);
+  if (!entry) return;
+  console.log(`[offscreen] Restarting ICE for ${viewerId}`);
+  try {
+    await sendOffer(viewerId, true);
+  } catch (err) {
+    console.error("[offscreen] ICE restart failed", err);
+  }
 }
 
 async function handleAnswer(viewerId: string, sdp: string) {
-  const pc = peers.get(viewerId);
-  if (!pc) return;
-  await pc.setRemoteDescription({ type: "answer", sdp });
+  const entry = peers.get(viewerId);
+  if (!entry) return;
+  try {
+    await entry.pc.setRemoteDescription({ type: "answer", sdp });
+  } catch (err) {
+    console.error("[offscreen] Failed to apply answer", err);
+  }
 }
 
 async function handleViewerIce(
   viewerId: string,
   candidate: RTCIceCandidateInit,
 ) {
-  const pc = peers.get(viewerId);
-  if (!pc) return;
+  const entry = peers.get(viewerId);
+  if (!entry) return;
   try {
-    await pc.addIceCandidate(candidate);
+    await entry.pc.addIceCandidate(candidate);
   } catch (err) {
     console.warn("[offscreen] Failed to add ICE candidate", err);
   }
 }
 
 function handleViewerLeft(viewerId: string) {
-  const pc = peers.get(viewerId);
-  if (pc) {
-    pc.close();
+  const entry = peers.get(viewerId);
+  if (entry) {
+    entry.pc.close();
     peers.delete(viewerId);
   }
+}
+
+function sendSignal(payload: object) {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(payload));
+  }
+}
+
+function startPingLoop() {
+  stopPingLoop();
+  pingTimer = setInterval(() => sendSignal({ type: "ping" }), PRESENTER_PING_INTERVAL_MS);
+}
+
+function stopPingLoop() {
+  if (pingTimer) {
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
+}
+
+function startStatsLoop() {
+  if (statsTimer) return;
+  statsTimer = setInterval(collectAndReportStats, STATS_INTERVAL_MS);
+}
+
+function stopStatsLoop() {
+  if (statsTimer) {
+    clearInterval(statsTimer);
+    statsTimer = null;
+  }
+}
+
+async function collectAndReportStats() {
+  if (peers.size === 0) return;
+  const all: ViewerStats[] = [];
+
+  for (const [viewerId, entry] of peers.entries()) {
+    const stats = await entry.pc.getStats();
+    let bytesSent = 0;
+    let packetsSent = 0;
+    let packetsLost = 0;
+    let rttMs = 0;
+
+    stats.forEach((report) => {
+      if (report.type === "outbound-rtp" && report.kind === "video") {
+        bytesSent += report.bytesSent ?? 0;
+        packetsSent += report.packetsSent ?? 0;
+      }
+      if (report.type === "remote-inbound-rtp" && report.kind === "video") {
+        packetsLost += report.packetsLost ?? 0;
+        if (typeof report.roundTripTime === "number") {
+          rttMs = Math.round(report.roundTripTime * 1000);
+        }
+      }
+    });
+
+    const now = Date.now();
+    const dtSec = Math.max((now - entry.lastReportAt) / 1000, 0.001);
+    const bitrateKbps = Math.round(((bytesSent - entry.lastBytesSent) * 8) / 1000 / dtSec);
+    const dPacketsSent = Math.max(packetsSent - entry.packetsSent, 0);
+    const dPacketsLost = Math.max(packetsLost - entry.packetsLost, 0);
+    const packetLossPct =
+      dPacketsSent > 0 ? Math.min((dPacketsLost / dPacketsSent) * 100, 100) : 0;
+
+    entry.lastBytesSent = bytesSent;
+    entry.lastReportAt = now;
+    entry.packetsSent = packetsSent;
+    entry.packetsLost = packetsLost;
+
+    all.push({
+      viewerId,
+      state: (entry.pc.connectionState as PeerConnectionStateLike) ?? "unknown",
+      quality: deriveQuality(packetLossPct, rttMs, entry.pc.connectionState),
+      bitrateKbps: Math.max(bitrateKbps, 0),
+      packetLossPct: Math.round(packetLossPct * 10) / 10,
+      rttMs,
+      updatedAt: now,
+    });
+  }
+
+  chrome.runtime
+    .sendMessage({ type: "VIEWER_STATS_UPDATE", stats: all })
+    .catch(() => {});
+}
+
+function deriveQuality(
+  lossPct: number,
+  rttMs: number,
+  state: RTCPeerConnectionState,
+): ConnectionQuality {
+  if (state === "failed" || state === "closed") return "failed";
+  if (state !== "connected") return "fair";
+  if (lossPct < 1 && rttMs < 150) return "good";
+  if (lossPct < 5 && rttMs < 400) return "fair";
+  return "poor";
 }
 
 function notifyViewerCount(count: number) {
@@ -215,7 +412,16 @@ function notifyViewerCount(count: number) {
 }
 
 function stopCapture() {
-  for (const pc of peers.values()) pc.close();
+  active = false;
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  stopStatsLoop();
+  stopPingLoop();
+
+  for (const entry of peers.values()) entry.pc.close();
   peers.clear();
 
   if (ws) {
@@ -230,7 +436,8 @@ function stopCapture() {
     stream = null;
   }
 
-  myClientId = null;
+  session = null;
+  reconnectAttempts = 0;
 }
 
 export {};

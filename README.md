@@ -98,6 +98,22 @@ pnpm deploy
 # → wss://oneclickcast-signaling.workers.dev
 ```
 
+### TURN server setup (optional but recommended for production)
+
+About 20% of WebRTC connections fail without TURN — typically users behind corporate firewalls or symmetric NATs. The signaling worker exposes a `/ice-servers` endpoint that both presenter and viewer fetch on startup. When TURN env vars are unset, it returns STUN-only (works on most home networks).
+
+To enable TURN, sign up for [Metered.ca](https://www.metered.ca/) (free tier: 50 GB/mo) and set the secrets:
+
+```bash
+cd apps/signaling
+pnpm exec wrangler secret put TURN_HOST       # e.g. yourapp.metered.live
+pnpm exec wrangler secret put TURN_USERNAME
+pnpm exec wrangler secret put TURN_CREDENTIAL
+pnpm deploy
+```
+
+Self-hosting alternative: run `coturn` on an Oracle Cloud Free Tier VM (forever-free), then point `TURN_HOST` at it.
+
 ### Deploying the web app
 
 ```bash
@@ -119,7 +135,7 @@ pnpm build
 
 - [x] Phase 0: Monorepo scaffold
 - [x] Phase 1: WebRTC screen-share MVP (presenter offscreen doc, multi-viewer)
-- [ ] Phase 2: TURN + reliability
+- [x] Phase 2: TURN + reliability (auto-reconnect, ICE restart, per-viewer stats, heartbeat)
 - [ ] Phase 3: Engagement tracking + audio
 - [ ] Phase 4: Tab remote control
 - [ ] Phase 5: Projector mode
