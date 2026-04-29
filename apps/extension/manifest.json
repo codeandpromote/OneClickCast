@@ -4,7 +4,6 @@
   "short_name": "OneClickCast",
   "version": "0.1.0",
   "description": "Share your screen with anyone in one click. No install needed for viewers, even on mobile.",
-  "author": "OneClickCast",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "src/assets/icon-16.png",

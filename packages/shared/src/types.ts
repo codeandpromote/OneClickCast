@@ -1,5 +1,18 @@
 export type ClientRole = "presenter" | "viewer";
 
+export interface IceCandidateInit {
+  candidate?: string;
+  sdpMLineIndex?: number | null;
+  sdpMid?: string | null;
+  usernameFragment?: string | null;
+}
+
+export interface IceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
 export interface OfferMessage {
   type: "offer";
   sdp: string;
@@ -16,7 +29,7 @@ export interface AnswerMessage {
 
 export interface IceCandidateMessage {
   type: "ice-candidate";
-  candidate: RTCIceCandidateInit;
+  candidate: IceCandidateInit;
   targetId?: string;
   fromId?: string;
 }
@@ -87,7 +100,7 @@ export type SignalingMessage =
   | ErrorMessage;
 
 export interface RoomConfig {
-  iceServers: RTCIceServer[];
+  iceServers: IceServer[];
   maxBitrateKbps: number;
   preferredCodec: "VP8" | "VP9" | "H264" | "AV1";
 }
