@@ -154,28 +154,8 @@ export function Popup() {
     setStatus("starting");
     setError(null);
     try {
-      // Show the desktopCapture picker from the popup context. Calling this
-      // from the service worker in MV3 is unreliable because Chrome
-      // doesn't treat SW-handled messages as carrying a user gesture.
-      const streamId = await new Promise<string>((resolve, reject) => {
-        chrome.desktopCapture.chooseDesktopMedia(
-          ["screen", "window", "tab", "audio"],
-          (id) => {
-            const lastErr = chrome.runtime.lastError;
-            if (lastErr) {
-              reject(new Error(lastErr.message));
-            } else if (!id) {
-              reject(new Error("Capture cancelled"));
-            } else {
-              resolve(id);
-            }
-          },
-        );
-      });
-
       const res = (await chrome.runtime.sendMessage({
         type: "START_SHARE",
-        streamId,
       })) as { shareLink?: string; error?: string };
       if (res?.error) throw new Error(res.error);
       if (res?.shareLink) {
@@ -203,21 +183,8 @@ export function Popup() {
         throw new Error("Cannot share Chrome system tabs");
       }
 
-      const streamId = await new Promise<string>((resolve, reject) => {
-        chrome.tabCapture.getMediaStreamId(
-          { targetTabId: tab.id! },
-          (streamId) => {
-            const err = chrome.runtime.lastError;
-            if (err || !streamId)
-              reject(new Error(err?.message ?? "No stream id"));
-            else resolve(streamId);
-          },
-        );
-      });
-
       const res = (await chrome.runtime.sendMessage({
         type: "START_TAB_SHARE",
-        streamId,
         tabId: tab.id,
         tabTitle: tab.title,
       })) as { shareLink?: string; error?: string };

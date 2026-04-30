@@ -146,7 +146,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "START_SHARE": {
         try {
-          const result = await startShare(msg.streamId as string | undefined);
+          const result = await startShare();
           sendResponse(result);
         } catch (e) {
           sendResponse({
@@ -158,7 +158,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       case "START_TAB_SHARE": {
         try {
-          const result = await startTabShare(msg.streamId, msg.tabId, msg.tabTitle);
+          const result = await startTabShare(msg.tabId, msg.tabTitle);
           sendResponse(result);
         } catch (e) {
           sendResponse({
@@ -347,11 +347,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true;
 });
 
-async function startShare(
-  streamId?: string,
-): Promise<{ shareLink: string; roomId: string } | { error: string }> {
-  if (!streamId) return { error: "No stream id provided" };
-
+async function startShare(): Promise<
+  { shareLink: string; roomId: string } | { error: string }
+> {
   const roomId = generateRoomId();
   const shareLink = `${VIEWER_BASE_URL}/${roomId}`;
 
@@ -359,12 +357,10 @@ async function startShare(
 
   const ack = (await chrome.runtime.sendMessage({
     target: "offscreen",
-    type: "START_CAPTURE",
-    streamId,
+    type: "PICK_AND_START_DESKTOP",
     roomId,
     signalingUrl: SIGNALING_URL,
     apiKey: auth?.apiKey,
-    mode: "any",
   })) as { ok: boolean; error?: string } | undefined;
 
   if (!ack?.ok) {
@@ -387,12 +383,11 @@ async function startShare(
 }
 
 async function startTabShare(
-  streamId: string,
   tabId: number,
   tabTitle?: string,
 ): Promise<{ shareLink: string; roomId: string } | { error: string }> {
-  if (!streamId || typeof tabId !== "number") {
-    return { error: "Invalid tab share params" };
+  if (typeof tabId !== "number") {
+    return { error: "Invalid tab id" };
   }
 
   const roomId = generateRoomId();
@@ -402,13 +397,12 @@ async function startTabShare(
 
   const ack = (await chrome.runtime.sendMessage({
     target: "offscreen",
-    type: "START_CAPTURE",
-    streamId,
+    type: "TAB_CAPTURE_AND_START",
+    tabId,
+    tabTitle,
     roomId,
     signalingUrl: SIGNALING_URL,
     apiKey: auth?.apiKey,
-    mode: "tab",
-    tabTitle,
   })) as { ok: boolean; error?: string } | undefined;
 
   if (!ack?.ok) {

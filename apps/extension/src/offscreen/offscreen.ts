@@ -35,6 +35,24 @@ interface OffscreenStartMessage {
   tabTitle?: string;
 }
 
+interface OffscreenPickAndStartMessage {
+  target: "offscreen";
+  type: "PICK_AND_START_DESKTOP";
+  roomId: string;
+  signalingUrl: string;
+  apiKey?: string;
+}
+
+interface OffscreenTabCaptureStartMessage {
+  target: "offscreen";
+  type: "TAB_CAPTURE_AND_START";
+  tabId: number;
+  tabTitle?: string;
+  roomId: string;
+  signalingUrl: string;
+  apiKey?: string;
+}
+
 interface OffscreenStopMessage {
   target: "offscreen";
   type: "STOP_CAPTURE";
@@ -57,6 +75,8 @@ interface OffscreenToggleRecordingMessage {
 
 type OffscreenMessage =
   | OffscreenStartMessage
+  | OffscreenPickAndStartMessage
+  | OffscreenTabCaptureStartMessage
   | OffscreenStopMessage
   | OffscreenToggleMicMessage
   | OffscreenToggleProjectorMessage
@@ -111,6 +131,35 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
           msg.tabTitle,
         );
         sendResponse({ ok: true });
+      } else if (msg.type === "PICK_AND_START_DESKTOP") {
+        const streamId = await pickDesktopStreamId();
+        if (!streamId) {
+          sendResponse({ ok: false, error: "Capture cancelled" });
+          return;
+        }
+        await startCapture(
+          streamId,
+          msg.roomId,
+          msg.signalingUrl,
+          msg.apiKey,
+          "any",
+        );
+        sendResponse({ ok: true });
+      } else if (msg.type === "TAB_CAPTURE_AND_START") {
+        const streamId = await tabCaptureStreamId(msg.tabId);
+        if (!streamId) {
+          sendResponse({ ok: false, error: "Tab capture failed" });
+          return;
+        }
+        await startCapture(
+          streamId,
+          msg.roomId,
+          msg.signalingUrl,
+          msg.apiKey,
+          "tab",
+          msg.tabTitle,
+        );
+        sendResponse({ ok: true });
       } else if (msg.type === "STOP_CAPTURE") {
         await stopCapture();
         sendResponse({ ok: true });
@@ -132,6 +181,45 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
   })();
   return true;
 });
+
+function pickDesktopStreamId(): Promise<string | null> {
+  return new Promise((resolve) => {
+    chrome.desktopCapture.chooseDesktopMedia(
+      ["screen", "window", "tab", "audio"],
+      (id) => {
+        if (chrome.runtime.lastError) {
+          console.warn(
+            "[offscreen] desktopCapture error",
+            chrome.runtime.lastError,
+          );
+          resolve(null);
+        } else if (!id) {
+          resolve(null);
+        } else {
+          resolve(id);
+        }
+      },
+    );
+  });
+}
+
+function tabCaptureStreamId(targetTabId: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    chrome.tabCapture.getMediaStreamId({ targetTabId }, (id) => {
+      if (chrome.runtime.lastError) {
+        console.warn(
+          "[offscreen] tabCapture error",
+          chrome.runtime.lastError,
+        );
+        resolve(null);
+      } else if (!id) {
+        resolve(null);
+      } else {
+        resolve(id);
+      }
+    });
+  });
+}
 
 async function startCapture(
   streamId: string,
