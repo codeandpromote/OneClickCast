@@ -350,6 +350,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 async function startShare(): Promise<
   { shareLink: string; roomId: string } | { error: string }
 > {
+  console.log("[SW] startShare: calling chooseDesktopMedia...");
+  const streamId = await chooseDesktopMedia();
+  console.log(
+    "[SW] chooseDesktopMedia returned:",
+    streamId ? `streamId(${streamId.slice(0, 8)}...)` : "null/empty",
+  );
+  if (!streamId) return { error: "Capture cancelled or picker dismissed" };
+
   const roomId = generateRoomId();
   const shareLink = `${VIEWER_BASE_URL}/${roomId}`;
 
@@ -357,11 +365,15 @@ async function startShare(): Promise<
 
   const ack = (await chrome.runtime.sendMessage({
     target: "offscreen",
-    type: "PICK_AND_START_DESKTOP",
+    type: "START_CAPTURE",
+    streamId,
     roomId,
     signalingUrl: SIGNALING_URL,
     apiKey: auth?.apiKey,
+    mode: "any",
   })) as { ok: boolean; error?: string } | undefined;
+
+  console.log("[SW] offscreen START_CAPTURE ack:", ack);
 
   if (!ack?.ok) {
     await closeOffscreen();
@@ -382,12 +394,47 @@ async function startShare(): Promise<
   return { shareLink, roomId };
 }
 
+function chooseDesktopMedia(): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      chrome.desktopCapture.chooseDesktopMedia(
+        ["screen", "window", "tab", "audio"],
+        (streamId) => {
+          const err = chrome.runtime.lastError;
+          if (err) {
+            console.warn("[SW] chooseDesktopMedia error:", err.message);
+            resolve(null);
+          } else if (!streamId) {
+            console.log("[SW] chooseDesktopMedia: user cancelled picker");
+            resolve(null);
+          } else {
+            resolve(streamId);
+          }
+        },
+      );
+    } catch (err) {
+      console.error("[SW] chooseDesktopMedia threw:", err);
+      resolve(null);
+    }
+  });
+}
+
 async function startTabShare(
   tabId: number,
   tabTitle?: string,
 ): Promise<{ shareLink: string; roomId: string } | { error: string }> {
   if (typeof tabId !== "number") {
     return { error: "Invalid tab id" };
+  }
+
+  console.log("[SW] startTabShare: calling tabCapture for tab", tabId);
+  const streamId = await getTabCaptureStreamId(tabId);
+  console.log(
+    "[SW] tabCapture returned:",
+    streamId ? `streamId(${streamId.slice(0, 8)}...)` : "null/empty",
+  );
+  if (!streamId) {
+    return { error: "Tab capture failed (try clicking on the tab first)" };
   }
 
   const roomId = generateRoomId();
@@ -397,13 +444,16 @@ async function startTabShare(
 
   const ack = (await chrome.runtime.sendMessage({
     target: "offscreen",
-    type: "TAB_CAPTURE_AND_START",
-    tabId,
-    tabTitle,
+    type: "START_CAPTURE",
+    streamId,
     roomId,
     signalingUrl: SIGNALING_URL,
     apiKey: auth?.apiKey,
+    mode: "tab",
+    tabTitle,
   })) as { ok: boolean; error?: string } | undefined;
+
+  console.log("[SW] offscreen tab START_CAPTURE ack:", ack);
 
   if (!ack?.ok) {
     await closeOffscreen();
@@ -424,6 +474,27 @@ async function startTabShare(
   await persistSession();
 
   return { shareLink, roomId };
+}
+
+function getTabCaptureStreamId(targetTabId: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      chrome.tabCapture.getMediaStreamId({ targetTabId }, (streamId) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          console.warn("[SW] tabCapture error:", err.message);
+          resolve(null);
+        } else if (!streamId) {
+          resolve(null);
+        } else {
+          resolve(streamId);
+        }
+      });
+    } catch (err) {
+      console.error("[SW] tabCapture threw:", err);
+      resolve(null);
+    }
+  });
 }
 
 async function stopShare() {
