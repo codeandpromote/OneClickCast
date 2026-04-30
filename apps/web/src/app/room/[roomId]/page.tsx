@@ -63,9 +63,16 @@ export default function ViewerRoom({
       pcRef.current = pc;
 
       pc.ontrack = (event) => {
+        console.log("[viewer] ontrack fired, kind:", event.track.kind);
         if (videoRef.current && event.streams[0]) {
           videoRef.current.srcObject = event.streams[0];
           setState("live");
+          // Some mobile browsers (especially iOS Safari) refuse autoplay
+          // even with the autoPlay attribute. Force-call play() and
+          // ignore the rejection - user gesture fallback button below.
+          videoRef.current.play().catch((err) => {
+            console.warn("[viewer] play() rejected:", err);
+          });
         }
       };
 
@@ -275,6 +282,7 @@ export default function ViewerRoom({
               autoPlay
               playsInline
               controls={false}
+              onClick={() => videoRef.current?.play().catch(() => {})}
               className="max-w-full max-h-full rounded-lg shadow-2xl bg-black block"
             />
             {controlActive && (
@@ -295,6 +303,10 @@ export default function ViewerRoom({
                 <p className="text-lg font-medium">Waiting for presenter…</p>
                 <p className="text-sm text-white/60 mt-2">
                   Room <span className="font-mono">{roomId}</span>
+                </p>
+                <p className="text-[10px] text-white/30 mt-6 max-w-xs mx-auto break-all">
+                  Connected to{" "}
+                  <span className="font-mono">{SIGNALING_URL}</span>
                 </p>
               </>
             )}

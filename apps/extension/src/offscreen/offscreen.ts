@@ -377,7 +377,15 @@ function notifyEngagement() {
 }
 
 async function handleViewerJoined(viewerId: string) {
-  if (!stream || !session) return;
+  console.log(
+    `[offscreen] viewer-joined ${viewerId.slice(0, 6)} | stream=${!!stream} session=${!!session}`,
+  );
+  if (!stream || !session) {
+    console.warn(
+      "[offscreen] handleViewerJoined aborting: stream or session is null. The presenter side has no media to send.",
+    );
+    return;
+  }
 
   const pc = new RTCPeerConnection({ iceServers: session.iceServers });
   peers.set(viewerId, {
@@ -431,14 +439,20 @@ async function handleViewerJoined(viewerId: string) {
 
 async function sendOffer(viewerId: string, iceRestart: boolean) {
   const entry = peers.get(viewerId);
-  if (!entry) return;
+  if (!entry) {
+    console.warn(`[offscreen] sendOffer: no peer for ${viewerId.slice(0, 6)}`);
+    return;
+  }
   const offer = await entry.pc.createOffer({ iceRestart });
   await entry.pc.setLocalDescription(offer);
-  sendSignal({
+  const sent = sendSignal({
     type: "offer",
     sdp: offer.sdp ?? "",
     targetId: viewerId,
   });
+  console.log(
+    `[offscreen] offer sent to ${viewerId.slice(0, 6)} (iceRestart=${iceRestart}, sent=${sent})`,
+  );
 }
 
 async function restartIceFor(viewerId: string) {
@@ -490,10 +504,16 @@ function handleViewerLeft(viewerId: string) {
   notifyEngagement();
 }
 
-function sendSignal(payload: object) {
+function sendSignal(payload: object): boolean {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(payload));
+    return true;
   }
+  console.warn(
+    `[offscreen] sendSignal: WS not open (state=${ws?.readyState ?? "null"})`,
+    payload,
+  );
+  return false;
 }
 
 function startPingLoop() {

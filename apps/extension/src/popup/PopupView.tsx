@@ -423,11 +423,18 @@ export function Popup() {
           )}
 
           {!recording && lastRecording && (
-            <div className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5 leading-snug">
-              Saved {lastRecording.filename} ·{" "}
-              {formatBytes(lastRecording.sizeBytes)} ·{" "}
+            <button
+              onClick={() => chrome.tabs.create({ url: "chrome://downloads" })}
+              className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1.5 leading-snug text-left hover:bg-emerald-100 transition"
+            >
+              ✓ Saved <span className="font-mono">{lastRecording.filename}</span>{" "}
+              · {formatBytes(lastRecording.sizeBytes)} ·{" "}
               {formatElapsed(lastRecording.durationMs)}
-            </div>
+              <br />
+              <span className="text-emerald-600">
+                Click to open Downloads folder
+              </span>
+            </button>
           )}
 
           {controlSupported && (

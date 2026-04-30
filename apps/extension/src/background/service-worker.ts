@@ -279,6 +279,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               durationMs: msg.finalized.durationMs,
               finishedAt: Date.now(),
             };
+            try {
+              const sizeMb = (msg.finalized.sizeBytes / 1024 / 1024).toFixed(1);
+              await chrome.notifications.create(`recording-${Date.now()}`, {
+                type: "basic",
+                iconUrl: "src/assets/icon-128.png",
+                title: "Recording saved",
+                message: `${msg.finalized.filename} (${sizeMb} MB) — check your Downloads folder`,
+                priority: 2,
+              });
+            } catch (err) {
+              console.warn("[OneClickCast] recording notification failed", err);
+            }
           }
         } else if (msg.startedAt) {
           session.recordingStartedAt = msg.startedAt;
