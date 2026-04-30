@@ -35,6 +35,14 @@ interface OffscreenStartMessage {
   tabTitle?: string;
 }
 
+interface OffscreenStartDisplayMediaMessage {
+  target: "offscreen";
+  type: "START_DISPLAY_MEDIA";
+  roomId: string;
+  signalingUrl: string;
+  apiKey?: string;
+}
+
 interface OffscreenStopMessage {
   target: "offscreen";
   type: "STOP_CAPTURE";
@@ -57,6 +65,7 @@ interface OffscreenToggleRecordingMessage {
 
 type OffscreenMessage =
   | OffscreenStartMessage
+  | OffscreenStartDisplayMediaMessage
   | OffscreenStopMessage
   | OffscreenToggleMicMessage
   | OffscreenToggleProjectorMessage
@@ -111,6 +120,9 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
           msg.tabTitle,
         );
         sendResponse({ ok: true });
+      } else if (msg.type === "START_DISPLAY_MEDIA") {
+        await startDisplayMedia(msg.roomId, msg.signalingUrl, msg.apiKey);
+        sendResponse({ ok: true });
       } else if (msg.type === "STOP_CAPTURE") {
         await stopCapture();
         sendResponse({ ok: true });
@@ -132,6 +144,29 @@ chrome.runtime.onMessage.addListener((raw, _sender, sendResponse) => {
   })();
   return true;
 });
+
+async function startDisplayMedia(
+  roomId: string,
+  signalingUrl: string,
+  apiKey?: string,
+) {
+  if (active) stopCapture();
+
+  // Browser-native screen-share picker. Works in offscreen documents
+  // when DISPLAY_MEDIA is in the create reasons. Bypasses
+  // chrome.desktopCapture entirely - more reliable on macOS where
+  // Screen Recording permission gating affects the chrome.* API.
+  stream = await navigator.mediaDevices.getDisplayMedia({
+    audio: true,
+    video: {
+      width: { max: 1920 },
+      height: { max: 1080 },
+      frameRate: { max: 30 },
+    },
+  });
+
+  await afterStreamAcquired(roomId, signalingUrl, apiKey, "any", undefined);
+}
 
 async function startCapture(
   streamId: string,
@@ -165,6 +200,18 @@ async function startCapture(
       },
     } as unknown as MediaTrackConstraints,
   });
+
+  await afterStreamAcquired(roomId, signalingUrl, apiKey, mode, tabTitle);
+}
+
+async function afterStreamAcquired(
+  roomId: string,
+  signalingUrl: string,
+  apiKey: string | undefined,
+  mode: "any" | "tab",
+  tabTitle: string | undefined,
+) {
+  if (!stream) return;
 
   const videoTrack = stream.getVideoTracks()[0];
   if (videoTrack) {

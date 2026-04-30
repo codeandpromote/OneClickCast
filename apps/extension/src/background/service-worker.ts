@@ -350,34 +350,32 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 async function startShare(): Promise<
   { shareLink: string; roomId: string } | { error: string }
 > {
-  console.log("[SW] startShare: calling chooseDesktopMedia...");
-  const streamId = await chooseDesktopMedia();
-  console.log(
-    "[SW] chooseDesktopMedia returned:",
-    streamId ? `streamId(${streamId.slice(0, 8)}...)` : "null/empty",
-  );
-  if (!streamId) return { error: "Capture cancelled or picker dismissed" };
-
   const roomId = generateRoomId();
   const shareLink = `${VIEWER_BASE_URL}/${roomId}`;
 
   await ensureOffscreen();
 
+  // Use getDisplayMedia (browser-native screen picker) inside the offscreen
+  // document. This avoids chrome.desktopCapture, which has been unreliable
+  // in MV3 service workers on macOS.
+  console.log("[SW] startShare: telling offscreen to call getDisplayMedia");
   const ack = (await chrome.runtime.sendMessage({
     target: "offscreen",
-    type: "START_CAPTURE",
-    streamId,
+    type: "START_DISPLAY_MEDIA",
     roomId,
     signalingUrl: SIGNALING_URL,
     apiKey: auth?.apiKey,
-    mode: "any",
   })) as { ok: boolean; error?: string } | undefined;
 
-  console.log("[SW] offscreen START_CAPTURE ack:", ack);
+  console.log("[SW] offscreen START_DISPLAY_MEDIA ack:", ack);
 
   if (!ack?.ok) {
     await closeOffscreen();
-    return { error: ack?.error ?? "Failed to start capture" };
+    return {
+      error:
+        ack?.error ??
+        "Capture failed. On macOS, check Chrome has Screen Recording permission in System Settings → Privacy & Security.",
+    };
   }
 
   session = {
@@ -392,31 +390,6 @@ async function startShare(): Promise<
   await persistSession();
 
   return { shareLink, roomId };
-}
-
-function chooseDesktopMedia(): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      chrome.desktopCapture.chooseDesktopMedia(
-        ["screen", "window", "tab", "audio"],
-        (streamId) => {
-          const err = chrome.runtime.lastError;
-          if (err) {
-            console.warn("[SW] chooseDesktopMedia error:", err.message);
-            resolve(null);
-          } else if (!streamId) {
-            console.log("[SW] chooseDesktopMedia: user cancelled picker");
-            resolve(null);
-          } else {
-            resolve(streamId);
-          }
-        },
-      );
-    } catch (err) {
-      console.error("[SW] chooseDesktopMedia threw:", err);
-      resolve(null);
-    }
-  });
 }
 
 async function startTabShare(
@@ -687,6 +660,7 @@ async function ensureOffscreen() {
     url: OFFSCREEN_PATH,
     reasons: [
       "USER_MEDIA" as chrome.offscreen.Reason,
+      "DISPLAY_MEDIA" as chrome.offscreen.Reason,
       "WEB_RTC" as chrome.offscreen.Reason,
     ],
     justification: "Capture screen and stream to viewers via WebRTC",
